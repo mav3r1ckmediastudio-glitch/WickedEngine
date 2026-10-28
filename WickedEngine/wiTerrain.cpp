@@ -209,6 +209,12 @@ namespace wi::terrain
 		wi::vector<Chunk> removable_chunks; // chunks that were invalidated are regenerated on the generator thread. Before merging them with the scene, the previous version of them will need to be removed from the destination scene
 		std::deque<Chunk> priority_invalidation; // to not let invalidation stuck at same chunks every frame while editing splines, for more appealing visual feedback
 		wi::vector<Chunk> build_batch; // Reused each generation run (cleared, capacity kept) to avoid per-frame allocation
+		// Native chunk regeneration discards all ChunkData in Generation_Restart.
+		// Retain authored extra terrain material masks (e.g. riverbed fifth
+		// layer) by chunk coordinate until that chunk is rebuilt. Transient and
+		// only populated for >4 material terrains. Do not migrate authored
+		// terrain heights or invoke procedural spline terrain modifiers.
+		wi::unordered_map<Chunk, wi::vector<BlendmapLayer>> authored_material_layers;
 	};
 
 	wi::jobsystem::context virtual_texture_ctx;
@@ -476,6 +482,24 @@ namespace wi::terrain
 			grass_material.SetDirty(false);
 		}
 
+		// Retain authored native terrain paint across GPU/material lifecycle
+		// restarts. This narrow path only activates for extra material slots;
+		// ordinary four-layer Wicked procedural terrains are unchanged.
+		generator->authored_material_layers.clear();
+		if (materialEntities.size() > MATERIAL_COUNT)
+		{
+			for (const auto& kv : chunks)
+			{
+				const auto& layers = kv.second.blendmap_layers;
+				if (layers.size() != materialEntities.size())
+					continue;
+				bool complete = true;
+				for (const auto& layer : layers)
+					complete &= layer.pixels.size() == vertexCount;
+				if (complete)
+					generator->authored_material_layers[kv.first] = layers;
+			}
+		}
 		for (auto it = chunks.begin(); it != chunks.end(); it++)
 		{
 			ChunkData& chunk_data = it->second;
@@ -1008,6 +1032,15 @@ namespace wi::terrain
 			{
 				{
 					ChunkData& chunk_data = chunks[chunk];
+					// Generated native terrain chunks are recreated in Runtime after
+					// WISCENE loading. Reattach the original fifth rocky material
+					// (and first four) masks BEFORE constructing its GPU blendmap.
+					auto retained = generator->authored_material_layers.find(chunk);
+					if (retained != generator->authored_material_layers.end())
+					{
+						chunk_data.blendmap_layers = std::move(retained->second);
+						generator->authored_material_layers.erase(retained);
+					}
 
 					std::string chunk_name = "chunk_" + std::to_string(chunk.x) + "_" + std::to_string(chunk.z);
 					if (chunk_data.entity == INVALID_ENTITY)
@@ -1061,7 +1094,12 @@ namespace wi::terrain
 					mesh.vertex_tangents.resize(vertexCount);
 					mesh.vertex_uvset_0.resize(vertexCount);
 
-					chunk_data.blendmap_layers.resize(4);
+					// The four native procedural biome weights occupy slots 0..3.
+					// Extra authored terrain materials (e.g. Renegade rocky riverbed)
+					// must NOT be discarded when rebuilding native terrain chunks
+					// on WISCENE reopen, Test Game or a sculpt refresh.
+					chunk_data.blendmap_layers.resize(
+						std::max<size_t>(4, materialEntities.size()));
 					for (auto& x : chunk_data.blendmap_layers)
 					{
 						x.pixels.resize(vertexCount);
