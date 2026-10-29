@@ -4,6 +4,7 @@
 #include "wiHelper.h"
 #include "wiTextureHelper.h"
 #include "wiProfiler.h"
+#include "wiArguments.h"
 
 using namespace wi::graphics;
 using namespace wi::enums;
@@ -476,10 +477,20 @@ namespace wi
 
 		if (scene->weather.IsVolumetricClouds())
 		{
-			if (!volumetriccloudResources.texture_cloudRender.IsValid())
-			{
-				wi::renderer::CreateVolumetricCloudResources(volumetriccloudResources, internalResolution);
-			}
+			// Renegade formation quality: half-size rays, full-size temporal history.
+            const float formation = scene->weather.volumetricCloudParameters.layerFirst.padding0;
+            const bool formationQuality = formation >= 1 && formation <= 5 &&
+                wi::arguments::HasArgument("cloud-reference-quality");
+            const XMUINT2 cloudAllocation = formationQuality ?
+                XMUINT2(((internalResolution.x + 1) / 2) * 4, ((internalResolution.y + 1) / 2) * 4) :
+                internalResolution;
+            if (!volumetriccloudResources.texture_cloudRender.IsValid() ||
+                volumetriccloudResources.texture_cloudRender.desc.width != cloudAllocation.x / 4 ||
+                volumetriccloudResources.texture_cloudRender.desc.height != cloudAllocation.y / 4)
+            {
+                wi::renderer::CreateVolumetricCloudResources(volumetriccloudResources, cloudAllocation);
+                volumetriccloudResources.final_resolution = internalResolution;
+            }
 			volumetriccloudResources.AdvanceFrame();
 		}
 		else

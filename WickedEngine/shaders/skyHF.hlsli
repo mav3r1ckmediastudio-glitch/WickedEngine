@@ -2,6 +2,7 @@
 #define WI_SKY_HF
 #include "globals.hlsli"
 #include "skyAtmosphere.hlsli"
+#include "renegadeNightSky.hlsli"
 #include "fogHF.hlsli"
 
 // Custom Atmosphere based on: https://www.shadertoy.com/view/Ml2cWG
@@ -86,7 +87,20 @@ float3 AccurateAtmosphericScattering(float2 pixelPosition, float3 rayOrigin, flo
         totalColor = max(pow(saturate(dot(sunDirection, rayDirection)), 64) * sunColor, 0) * luminance * 1.0;
     }
 
-	if (GetFrame().options & OPTION_BIT_HEIGHT_FOG)
+	// Renegade sky contributions: off by default, existing sky/stars unchanged.
+    if (!darkMode)
+    {
+        totalColor += RenegadeMilkyWay(worldDirection, sunDirection, GetWeather().night_zenith.w);
+        float4 moon = RenegadeMoon(worldDirection, sunDirection, GetWeather().moon_parameters, GetWeather().moon_orbit);
+        totalColor = totalColor * (1.0f - moon.a) + moon.rgb;
+        totalColor += RenegadeNightGradient(worldDirection, sunDirection, GetWeather().night_sky_gradient, GetWeather().night_zenith, GetWeather().night_horizon);
+        [branch] if (GetWeather().aurora_intensity > 0.0f)
+        {
+            totalColor += RenegadeAurora(worldDirection, sunDirection, GetWeather().aurora_intensity, GetWeather().aurora_speed, GetWeather().aurora_coverage, GetTime());
+        }
+    }
+    if (!darkMode) totalColor += RenegadeShootingStars(worldDirection, sunDirection, GetWeather().night_padding, GetTime(), GetWeather().night_alignment_padding);
+    if (GetFrame().options & OPTION_BIT_HEIGHT_FOG)
 	{
 		const float3 planet_center = atmosphere.planetCenter * SKY_UNIT_TO_M;
 		const float bottom_radius = atmosphere.bottomRadius * SKY_UNIT_TO_M;

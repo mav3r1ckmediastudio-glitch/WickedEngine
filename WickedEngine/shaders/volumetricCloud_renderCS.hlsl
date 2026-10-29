@@ -1,6 +1,7 @@
 #define DISABLE_SOFT_SHADOWMAP
 #include "globals.hlsli"
 #include "volumetricCloudsHF.hlsli"
+#include "renegadeMoonCloudLighting.hlsli"
 #include "skyAtmosphere.hlsli"
 #include "lightingHF.hlsli"
 #include "fogHF.hlsli"
@@ -433,7 +434,7 @@ float3 SampleLocalLights(float3 worldPosition)
 	return localLightLuminance;
 }
 
-void VolumetricCloudLighting(AtmosphereParameters atmosphere, float3 startPosition, float3 worldPosition, float3 sunDirection, float3 sunIlluminance, float cosTheta, float stepSize, float heightFraction,
+void VolumetricCloudLighting(AtmosphereParameters atmosphere, float3 startPosition, float3 worldPosition, float3 sunDirection, float3 sunIlluminance, float cosTheta, float stepSize, float heightFraction, float3 moonSoftFill,
 	float cloudDensityFirst, float cloudDensitySecond, float3 weatherDataFirst, float3 weatherDataSecond,
 	LayerParameters layerParametersFirst, LayerParameters layerParametersSecond, float lod,
 	inout float3 luminance, inout float3 transmittanceToView, inout float depthWeightedSum, inout float depthWeightsSum)
@@ -477,6 +478,16 @@ void VolumetricCloudLighting(AtmosphereParameters atmosphere, float3 startPositi
 		}
 	}
 
+
+	// Lunar forward-scattering fills the *inside* of thin, backlit clouds,
+	// rather than highlighting the outer contour uniformly. The existing
+	// self-shadow transmittance and optical thickness control its visibility.
+	// No additional density, shadow, or raymarch samples are introduced.
+	const float lightVisible = saturate(dot(
+		participatingMedia.transmittanceToLight[0], 1.0f / 3.0f));
+	const float opticalDepth = dot(extinction, 1.0f / 3.0f) * stepSize;
+	environmentLuminance += moonSoftFill * (0.16f + 0.84f * lightVisible) /
+		(1.0f + 0.7f * opticalDepth);
 
 	// Sample dual lob phase with multiple scattering
 	float phaseFunction = DualLobPhase(GetWeather().volumetric_clouds.phaseG, GetWeather().volumetric_clouds.phaseG2, GetWeather().volumetric_clouds.phaseBlend, -cosTheta);
@@ -524,7 +535,7 @@ void VolumetricCloudLighting(AtmosphereParameters atmosphere, float3 startPositi
 float CalculateAtmosphereBlend(float tDepth)
 {
 	// Progressively increase alpha as clouds reaches the desired distance.
-	float fogDistance = saturate(tDepth * GetWeather().volumetric_clouds.horizonBlendAmount);
+	float fogDistance = saturate(RenegadeCloudHorizonDistance(tDepth) * GetWeather().volumetric_clouds.horizonBlendAmount);
 	
 	float fade = pow(fogDistance, GetWeather().volumetric_clouds.horizonBlendPower);
 	fade = smoothstep(0.0, 1.0, fade);
@@ -549,8 +560,8 @@ void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition,
 		float planetRadius = atmosphere.bottomRadius * SKY_UNIT_TO_M;
 		float3 planetCenterWorld = atmosphere.planetCenter * SKY_UNIT_TO_M;
 
-		const float cloudBottomRadius = planetRadius + GetWeather().volumetric_clouds.cloudStartHeight;
-		const float cloudTopRadius = planetRadius + GetWeather().volumetric_clouds.cloudStartHeight + GetWeather().volumetric_clouds.cloudThickness;
+		const float cloudBottomRadius = RenegadeCloudMarchBottomRadius(planetRadius + GetWeather().volumetric_clouds.cloudStartHeight);
+		const float cloudTopRadius = RenegadeCloudMarchTopRadius(planetRadius + GetWeather().volumetric_clouds.cloudStartHeight + GetWeather().volumetric_clouds.cloudThickness);
 		
 		float2 tTopSolutions = RaySphereIntersect(rayOrigin, rayDirection, planetCenterWorld, cloudTopRadius);
 		if (tTopSolutions.x > 0.0 || tTopSolutions.y > 0.0)
@@ -587,7 +598,7 @@ void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition,
 			return;
 		}
 
-		if (tMax <= tMin || tMin > GetWeather().volumetric_clouds.renderDistance)
+		if (tMax <= tMin || tMin > RenegadeCloudMarchRenderDistance(planetRadius, cloudTopRadius, GetWeather().volumetric_clouds.renderDistance))
 		{
 			cloudColor = float4(0.0, 0.0, 0.0, 0.0);
 			cloudDepth = FLT_MAX;
@@ -607,7 +618,15 @@ void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition,
 		tMax = tMin + marchingDistance;
 
 		steps = MAX_STEP_COUNT * saturate((tMax - tMin) * (1.0 / GetWeather().volumetric_clouds.inverseDistanceStepCount));
-		stepSize = (tMax - tMin) / steps;
+		// Renegade sampling: bound distance between samples of the 3D density field.
+        // Native scaling yields ~156m per sample even in a shallow layer.
+        if (GetWeather().volumetric_clouds.layerFirst.padding0 >= 1 &&
+            GetWeather().volumetric_clouds.layerFirst.padding0 <= 5)
+            // Adaptive world-space sampling: preserve 48-m near-field density edges.
+            // Distant rays permit wider steps, where perspective and temporal
+            // integration resolve fine-scale structure without uniform 384 steps.
+            steps = clamp(ceil((tMax - tMin) / (64.0 + 80.0 * saturate((tMin - 3000.0) / 10000.0))), 1.0, 384.0);
+        stepSize = (tMax - tMin) / steps;
 		
 		//float offset = dither(DTid.xy + GetTemporalAASampleRotation());
 		//float offset = InterleavedGradientNoise(DTid.xy, GetFrame().frame_count % 16);
@@ -623,8 +642,16 @@ void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition,
 	
 	float3 sunIlluminance = GetSunColor();
 	float3 sunDirection = GetSunDirection();
+    float3 cloudLightDirection = sunDirection;
+    float3 cloudLightIlluminance = sunIlluminance;
+    RenegadeApplyMoonlightToClouds(cloudLightDirection, cloudLightIlluminance, GetWeather().moon_parameters, GetWeather().moon_orbit);
+    const float2 moonLocality = RenegadeMoonCloudLocality(
+        rayDirection, cloudLightDirection, sunDirection.y,
+        GetWeather().moon_parameters);
+    const float3 moonSoftFill = cloudLightIlluminance * moonLocality.y;
+    cloudLightIlluminance *= moonLocality.x;
 	
-	float cosTheta = dot(rayDirection, sunDirection);
+	float cosTheta = dot(rayDirection, cloudLightDirection);
 
 	
 	float3 luminance = 0.0;
@@ -650,8 +677,17 @@ void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition,
 		if (!ValidCloudDensityLayers(heightFraction, weatherDataFirst, weatherDataSecond, layerParametersFirst, layerParametersSecond))
 		{
 			// We increment i every iteration, but for every additional step, we want to add that to the increment
-			i += GetWeather().volumetric_clouds.bigStepMarch - 1;
-			t += GetWeather().volumetric_clouds.bigStepMarch * stepSize;
+			float emptyStep = layerParametersFirst.layer.padding0 >= 1 &&
+                layerParametersFirst.layer.padding0 <= 5 ? 1.0 : GetWeather().volumetric_clouds.bigStepMarch;
+            // Renegade conservative whole-body bounds: the spherical-height
+            // coordinate map has a norm below 2. Never skip a secondary layer.
+            if (layerParametersFirst.layer.padding0 == 1 &&
+                layerParametersSecond.layer.coverageAmount <= 0 &&
+                layerParametersSecond.layer.coverageMinimum <= 0)
+                emptyStep = max(1.0, floor((-weatherDataFirst.r) / (2.0 * stepSize)));
+            // Continuous weather potential: bounded single-step empty traversal.
+            i += emptyStep - 1;
+            t += emptyStep * stepSize;
 			
 			continue;
 		}
@@ -665,7 +701,7 @@ void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition,
 
 		if (saturate(cloudDensityFirst + cloudDensitySecond) > CLOUD_DENSITY_THRESHOLD)
 		{
-			VolumetricCloudLighting(atmosphere, rayOrigin, sampleWorldPosition, sunDirection, sunIlluminance, cosTheta, stepSize, heightFraction,
+			VolumetricCloudLighting(atmosphere, rayOrigin, sampleWorldPosition, cloudLightDirection, cloudLightIlluminance, cosTheta, stepSize, heightFraction, moonSoftFill,
 				cloudDensityFirst, cloudDensitySecond, weatherDataFirst, weatherDataSecond,
 				layerParametersFirst, layerParametersSecond, lod,
 				luminance, transmittanceToView, depthWeightedSum, depthWeightsSum);

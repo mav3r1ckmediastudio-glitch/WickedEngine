@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <atomic>
 #include <mutex>
+#include <cmath>
 
 #ifdef _WIN32
 #include <malloc.h> // alloca
@@ -205,6 +206,28 @@ Texture texture_shapeNoise;
 Texture texture_detailNoise;
 Texture texture_curlNoise;
 Texture texture_weatherMap;
+// Renegade cached 3D bodies and immutable site attributes:
+Texture texture_renegadeCloudBodies;
+GPUBuffer buffer_renegadeCloudSites;
+Shader shader_renegadeCloudBodies;
+bool renegadeCloudBodiesReady = false;
+struct RenegadeCachedCloudSite { XMFLOAT4 attributes; XMFLOAT4 variation; };
+static_assert(sizeof(RenegadeCachedCloudSite) == 32);
+wi::vector<std::string> RenegadeCloudProofPermutation()
+{
+    if (wi::arguments::HasArgument("cloud-analytic-bodies") ||
+        (wi::arguments::HasArgument("single-cloud-body-study") &&
+         !wi::arguments::HasArgument("cloud-cached-body")))
+        return {"RENEGADE_CLOUD_ANALYTIC_REFERENCE"};
+    return {};
+}
+void BindRenegadeCloudFormationResources(CommandList cmd)
+{
+    if (texture_renegadeCloudBodies.IsValid())
+        device->BindResource(&texture_renegadeCloudBodies, 5, cmd);
+    if (buffer_renegadeCloudSites.IsValid())
+        device->BindResource(&buffer_renegadeCloudSites, 6, cmd);
+}
 
 // Direct reference to a renderable instance:
 struct alignas(16) RenderBatch
@@ -772,7 +795,22 @@ bool LoadShader(
 			bool success = wi::helper::Decompress(it->second.data, it->second.size, decompressed);
 			if (success)
 			{
-				return device->CreateShader(stage, decompressed.data(), decompressed.size(), &shader, entrypoint.c_str());
+				const bool audit = wi::arguments::HasArgument("cloud-shader-audit") && stage == ShaderStage::CS;
+                if (audit)
+                {
+                    uint64_t hash = 1469598103934665603ull;
+                    for (uint8_t byte : decompressed) hash = (hash ^ byte) * 1099511628211ull;
+                    wi::backlog::post("CS_BEGIN " + shaderbinaryfilename + " bytes=" +
+                        std::to_string(decompressed.size()) + " fnv=" + std::to_string(hash));
+                }
+                const bool created = device->CreateShader(stage, decompressed.data(),
+                    decompressed.size(), &shader, entrypoint.c_str());
+                if (!created)
+                    wi::backlog::post("GPU shader creation FAILED: " + shaderbinaryfilename,
+                        wi::backlog::LogLevel::Error);
+                if (audit) wi::backlog::post("CS_END " + shaderbinaryfilename +
+                    " created=" + std::to_string(created));
+                return created;
 			}
 			wi::backlog::post("shader dump decompression failure: " + shaderbinaryfilename, wi::backlog::LogLevel::Error);
 		}
@@ -845,6 +883,7 @@ bool LoadShader(
 
 void LoadShaders()
 {
+    renegadeCloudBodiesReady = false;
 	wi::jobsystem::Wait(raytracing_ctx);
 	raytracing_ctx.priority = wi::jobsystem::Priority::Low;
 
@@ -1055,13 +1094,16 @@ void LoadShaders()
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_BLOOMSEPARATE], "bloomseparateCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_AERIALPERSPECTIVE], "aerialPerspectiveCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_SHAPENOISE], "volumetricCloud_shapenoiseCS.cso"); });
+    wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) {
+        LoadShader(ShaderStage::CS, shader_renegadeCloudBodies, "renegadeCloudFormationVolumeCS.cso");
+    });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_DETAILNOISE], "volumetricCloud_detailnoiseCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_CURLNOISE], "volumetricCloud_curlnoiseCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_WEATHERMAP], "volumetricCloud_weathermapCS.cso"); });
-	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_RENDER], "volumetricCloud_renderCS.cso"); });
-	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_RENDER_CAPTURE], "volumetricCloud_renderCS_capture.cso"); });
+	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_RENDER], "volumetricCloud_renderCS.cso", ShaderModel::SM_6_0, RenegadeCloudProofPermutation()); });
+	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_RENDER_CAPTURE], "volumetricCloud_renderCS_capture.cso", ShaderModel::SM_6_0, RenegadeCloudProofPermutation()); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_REPROJECT], "volumetricCloud_reprojectCS.cso"); });
-	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_SHADOW_RENDER], "volumetricCloud_shadow_renderCS.cso"); });
+	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_SHADOW_RENDER], "volumetricCloud_shadow_renderCS.cso", ShaderModel::SM_6_0, RenegadeCloudProofPermutation()); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_FXAA], "fxaaCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_TEMPORALAA], "temporalaaCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_SHARPEN], "sharpenCS.cso"); });
@@ -4430,7 +4472,86 @@ void UpdatePerFrameData(
 
 	}
 
-	// Fill Entity Array with decals + envprobes + lights in the frustum:
+	// Renegade derived cloud resources are allocated only for new Cumulus.
+    if (scene.weather.IsVolumetricClouds() &&
+        scene.weather.volumetricCloudParameters.layerFirst.padding0 == 1 &&
+        !texture_renegadeCloudBodies.IsValid())
+    {
+        TextureDesc body;
+        body.type = TextureDesc::Type::TEXTURE_3D;
+        body.width = body.height = 256;
+        body.depth = 128;
+        body.mip_levels = 7;
+        body.format = Format::R16G16B16A16_FLOAT;
+        body.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::UNORDERED_ACCESS;
+        body.layout = ResourceState::SHADER_RESOURCE_COMPUTE;
+        device->CreateTexture(&body, nullptr, &texture_renegadeCloudBodies);
+        device->SetName(&texture_renegadeCloudBodies, "RenegadeCloudBodyVolume");
+        for (uint32_t mip = 0; mip < body.mip_levels; ++mip)
+        {
+            device->CreateSubresource(&texture_renegadeCloudBodies, SubresourceType::SRV, 0, 1, mip, 1);
+            device->CreateSubresource(&texture_renegadeCloudBodies, SubresourceType::UAV, 0, 1, mip, 1);
+        }
+        const auto mix = [](uint32_t v) {
+            v ^= v >> 16; v *= 0x7feb352d; v ^= v >> 15; v *= 0x846ca68b; v ^= v >> 16; return v;
+        };
+        const auto corner = [&](int x, int z) {
+            return float(mix(uint32_t(x) * 0x9e3779b9u ^ uint32_t(z) * 0x85ebca6bu) & 0x00ffffffu) / 16777216.0f;
+        };
+        wi::vector<RenegadeCachedCloudSite> sites(64 * 64);
+        for (int iz = 0; iz < 64; ++iz) for (int ix = 0; ix < 64; ++ix)
+        {
+            const int x = ix < 32 ? ix : ix - 64, z = iz < 32 ? iz : iz - 64;
+            const int rx = int(std::floor(float(x) / 4)), rz = int(std::floor(float(z) / 4));
+            const uint32_t seed = mix(uint32_t(rx) * 0x9e3779b9u ^ uint32_t(rz) * 0x85ebca6bu);
+            // Hierarchical 4x4 rank: admit complete groups before adjacent
+            // gaps fill; every 12-km tile still has unique ranks 0..15.
+            const uint32_t localX = uint32_t(x - rx * 4);
+            const uint32_t localZ = uint32_t(z - rz * 4);
+            const uint32_t quadrant = (localX >> 1) | ((localZ >> 1) << 1);
+            const uint32_t child = (localX & 1u) | ((localZ & 1u) << 1);
+            uint32_t quadrantOrder[4] = {0u, 1u, 2u, 3u};
+            uint32_t rankSeed = seed;
+            for (int k = 3; k > 0; --k)
+            {
+                rankSeed = mix(rankSeed + 0x9e3779b9u);
+                const uint32_t index = rankSeed % uint32_t(k + 1);
+                const uint32_t temp = quadrantOrder[k];
+                quadrantOrder[k] = quadrantOrder[index];
+                quadrantOrder[index] = temp;
+            }
+            uint32_t quadrantRank = 0;
+            for (uint32_t k = 0; k < 4; ++k)
+                if (quadrantOrder[k] == quadrant) quadrantRank = k;
+            const uint32_t intraSeed = mix(rankSeed ^ (quadrant * 0x85ebca6bu));
+            const uint32_t intraOdd = ((intraSeed >> 8) & 3u) | 1u;
+            // Hybrid clumping: half locally clustered, half dispersed.
+            const uint32_t clusterRank = quadrantRank * 4u +
+                ((child * intraOdd + (intraSeed & 3u)) & 3u);
+            const uint32_t dispersedOdd = ((seed >> 8) & 15u) | 1u;
+            const uint32_t dispersedRank =
+                ((localX + localZ * 4u) * dispersedOdd + (seed & 15u)) & 15u;
+            const uint32_t rank = ((seed >> 24) & 1u) ? clusterRank : dispersedRank;
+            const float rotation = corner(x + 47, z - 29) * 6.28318530718f;
+            auto& site = sites[ix + iz * 64];
+            // Decorrelated cell displacement; the rotating 4x4 window
+            // includes maximum ±0.45 cell offset plus full volume support.
+            site.attributes = XMFLOAT4((corner(x, z) - .5f) * .9f,
+                (corner(x + 37, z - 71) - .5f) * .9f, (rank + .5f) / 16.0f, corner(x + 113, z - 61));
+            site.variation = XMFLOAT4(std::cos(rotation), std::sin(rotation),
+                corner(x - 19, z + 83), corner(x + 101, z + 7));
+        }
+        GPUBufferDesc desc;
+        desc.size = sites.size() * sizeof(RenegadeCachedCloudSite);
+        desc.stride = sizeof(RenegadeCachedCloudSite);
+        desc.bind_flags = BindFlag::SHADER_RESOURCE;
+        desc.misc_flags = ResourceMiscFlag::BUFFER_STRUCTURED;
+        device->CreateBuffer(&desc, sites.data(), &buffer_renegadeCloudSites);
+        device->SetName(&buffer_renegadeCloudSites, "RenegadeCloudSites");
+        renegadeCloudBodiesReady = false;
+    }
+
+    // Fill Entity Array with decals + envprobes + lights in the frustum:
 	uint envprobearray_offset = 0;
 	uint envprobearray_count = 0;
 	uint lightarray_offset_directional = 0;
@@ -5570,7 +5691,31 @@ void UpdateRenderDataAsync(
 		volumetric_clouds_precomputed = true;
 	}
 
-	if (vis.scene->weather.IsVolumetricClouds() && vis.scene->weather.IsVolumetricCloudsCastShadow())
+	// Renegade body-volume GPU generation, after native noise initialization.
+    if (texture_renegadeCloudBodies.IsValid() && !renegadeCloudBodiesReady &&
+        vis.scene->weather.IsVolumetricClouds() &&
+        vis.scene->weather.volumetricCloudParameters.layerFirst.padding0 == 1)
+    {
+        device->EventBegin("Renegade Cloud Body Volume", cmd);
+        BindCommonResources(cmd);
+        auto barrier = GPUBarrier::Image(&texture_renegadeCloudBodies,
+            texture_renegadeCloudBodies.desc.layout, ResourceState::UNORDERED_ACCESS);
+        device->Barrier(&barrier, 1, cmd);
+        device->BindComputeShader(&shader_renegadeCloudBodies, cmd);
+        device->BindResource(&texture_detailNoise, 0, cmd);
+        device->BindUAV(&texture_renegadeCloudBodies, 0, cmd);
+        // Renegade metric-field dispatch follows the actual atlas dimensions.
+        const auto& fieldDesc = texture_renegadeCloudBodies.desc;
+        device->Dispatch((fieldDesc.width + 7) / 8,
+            (fieldDesc.height + 7) / 8, (fieldDesc.depth + 7) / 8, cmd);
+        barrier = GPUBarrier::Image(&texture_renegadeCloudBodies,
+            ResourceState::UNORDERED_ACCESS, texture_renegadeCloudBodies.desc.layout);
+        device->Barrier(&barrier, 1, cmd);
+        GenerateMipChain(texture_renegadeCloudBodies, MIPGENFILTER_LINEAR, cmd);
+        renegadeCloudBodiesReady = true;
+        device->EventEnd(cmd);
+    }
+    if (vis.scene->weather.IsVolumetricClouds() && vis.scene->weather.IsVolumetricCloudsCastShadow())
 	{
 		const Texture* weatherMapFirst = vis.scene->weather.volumetricCloudsWeatherMapFirst.IsValid() ? &vis.scene->weather.volumetricCloudsWeatherMapFirst.GetTexture() : nullptr;
 		const Texture* weatherMapSecond = vis.scene->weather.volumetricCloudsWeatherMapSecond.IsValid() ? &vis.scene->weather.volumetricCloudsWeatherMapSecond.GetTexture() : nullptr;
@@ -8991,6 +9136,7 @@ void ComputeVolumetricCloudShadows(
 		device->BindResource(&texture_shapeNoise, 0, cmd);
 		device->BindResource(&texture_detailNoise, 1, cmd);
 		device->BindResource(&texture_curlNoise, 2, cmd);
+    BindRenegadeCloudFormationResources(cmd);
 
 		if (weatherMapFirst != nullptr)
 		{
@@ -17099,8 +17245,8 @@ void Postprocess_VolumetricClouds(
 	PostProcess postprocess;
 
 	// Render quarter-res:
-	postprocess.resolution.x = res.final_resolution.x / 4;
-	postprocess.resolution.y = res.final_resolution.y / 4;
+	postprocess.resolution.x = res.texture_cloudRender.desc.width;
+    postprocess.resolution.y = res.texture_cloudRender.desc.height;
 	postprocess.resolution_rcp.x = 1.0f / postprocess.resolution.x;
 	postprocess.resolution_rcp.y = 1.0f / postprocess.resolution.y;
 	volumetricclouds_frame = (float)res.frame;
@@ -17120,6 +17266,7 @@ void Postprocess_VolumetricClouds(
 		device->BindResource(&texture_shapeNoise, 0, cmd);
 		device->BindResource(&texture_detailNoise, 1, cmd);
 		device->BindResource(&texture_curlNoise, 2, cmd);
+    BindRenegadeCloudFormationResources(cmd);
 
 		if (weatherMapFirst != nullptr)
 		{
@@ -17164,8 +17311,8 @@ void Postprocess_VolumetricClouds(
 	}
 
 	// Render half-res:
-	postprocess.resolution.x = res.final_resolution.x / 2;
-	postprocess.resolution.y = res.final_resolution.y / 2;
+	postprocess.resolution.x = res.texture_reproject[0].desc.width;
+    postprocess.resolution.y = res.texture_reproject[0].desc.height;
 	postprocess.resolution_rcp.x = 1.0f / postprocess.resolution.x;
 	postprocess.resolution_rcp.y = 1.0f / postprocess.resolution.y;
 
@@ -17281,6 +17428,7 @@ void VolumetricClouds_Capture(
 	device->BindResource(&texture_shapeNoise, 0, cmd);
 	device->BindResource(&texture_detailNoise, 1, cmd);
 	device->BindResource(&texture_curlNoise, 2, cmd);
+    BindRenegadeCloudFormationResources(cmd);
 
 	if (scene.weather.volumetricCloudsWeatherMapFirst.IsValid())
 	{

@@ -967,6 +967,18 @@ namespace wi::scene
 		shaderscene.weather.ocean.texture_displacementmap = device->GetDescriptorIndex(ocean.getDisplacementMap(), SubresourceType::SRV);
 		shaderscene.weather.ocean.texture_gradientmap = device->GetDescriptorIndex(ocean.getGradientMap(), SubresourceType::SRV);
 		shaderscene.weather.stars = weather.stars;
+        shaderscene.weather.night_sky_gradient = weather.night_sky_gradient;
+        shaderscene.weather.aurora_intensity = weather.aurora_intensity;
+        shaderscene.weather.aurora_speed = weather.aurora_speed;
+        shaderscene.weather.night_alignment_padding = 0.0f;
+        shaderscene.weather.night_zenith = weather.night_zenith;
+        shaderscene.weather.night_horizon = weather.night_horizon;
+        shaderscene.weather.aurora_coverage = weather.aurora_coverage;
+        shaderscene.weather.night_padding = XMFLOAT3(0,0,0);
+        shaderscene.weather.moon_parameters = weather.moon_parameters;
+        shaderscene.weather.moon_orbit = weather.moon_orbit;
+        shaderscene.weather.night_padding = weather.shooting_stars;
+        shaderscene.weather.night_alignment_padding = weather.shooting_star_preview_time;
 		XMStoreFloat4(&shaderscene.weather.stars_rotation, XMQuaternionNormalize(XMQuaternionInverse(XMLoadFloat4(&weather.stars_rotation_quaternion))));
 		shaderscene.weather.rain_amount = weather.rain_amount;
 		shaderscene.weather.rain_length = weather.rain_length;

@@ -21,7 +21,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 	const uint2 pixel = pos.xy;
 	const float depth = texture_depth[pixel];
 	
-	const uint2 reprojectionCoord = pixel / 2;
+	const uint2 reprojectionCoord = min(uint2(uv * postprocess.params0.xy), uint2(postprocess.params0.xy) - 1);
 	
 	const float2 reprojectionResolution = postprocess.params0.xy;
 	const float2 reprojectionTexelSize = postprocess.params0.zw;

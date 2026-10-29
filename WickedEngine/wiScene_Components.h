@@ -1873,6 +1873,17 @@ namespace wi::scene
 		float windWaveSize = 1;
 		float windSpeed = 1;
 		float stars = 0.5f;
+        // Transient renderer values restored from Renegade Environment metadata.
+        float night_sky_gradient = 0.0f;
+        float aurora_intensity = 0.0f;
+        float aurora_speed = 0.35f;
+        XMFLOAT4 night_zenith = XMFLOAT4(0.0018f,0.003f,0.0085f,0);
+        XMFLOAT4 night_horizon = XMFLOAT4(0.013f,0.012f,0.022f,1.0f);
+        float aurora_coverage = 0.4f;
+        XMFLOAT4 moon_parameters = XMFLOAT4(0.5f,1.0f,0,0);
+        XMFLOAT4 moon_orbit = XMFLOAT4(0,35,1,0);
+        XMFLOAT3 shooting_stars = XMFLOAT3(0,1,8);
+        float shooting_star_preview_time = -1000;
 		XMFLOAT3 gravity = XMFLOAT3(0, -10, 0);
 		float sky_rotation = 0; // horizontal rotation for skyMap texture (in radians)
 		float rain_amount = 0;

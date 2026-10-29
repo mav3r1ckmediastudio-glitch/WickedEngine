@@ -26,5 +26,5 @@ void main(uint3 DTid : SV_DispatchThreadID)
     worleySmall = Remap01(worleySmall, detailNoiseLowRemap, detailNoiseHighRemap);
     
     // Output them for later use
-    output[DTid] = float4(worleyLarge, worleyMedium, worleySmall, 1.0);
+    output[DTid] = float4(worleyLarge, worleyMedium, worleySmall, saturate(Voronoi(pos, 4.0, 13.0, true).r));
 }

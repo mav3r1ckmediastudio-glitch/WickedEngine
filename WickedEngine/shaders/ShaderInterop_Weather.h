@@ -217,6 +217,8 @@ struct alignas(16) VolumetricCloudParameters
 		cloudThickness = 5000.0f;
 
 		// First
+        layerFirst.padding0 = 0;
+        layerSecond.padding0 = 0;
 		{
 			// Lighting
 			layerFirst.albedo = float3(0.9f, 0.9f, 0.9f);
@@ -367,7 +369,14 @@ struct alignas(16) ShaderWeather
 
 	float4 stars_rotation; // quaternion
 
-	float3 padding_stars;
+	float night_sky_gradient;
+    float aurora_intensity;
+    float aurora_speed;
+    float night_alignment_padding;
+    float4 night_zenith;
+    float4 night_horizon;
+    float aurora_coverage;
+    float3 night_padding;
 
 	float sky_rotation_sin;
 	float sky_rotation_cos;
@@ -386,6 +395,8 @@ struct alignas(16) ShaderWeather
 	ShaderOcean ocean;
 	AtmosphereParameters atmosphere;
 	VolumetricCloudParameters volumetric_clouds;
+    float4 moon_parameters;
+    float4 moon_orbit;
 };
 
 #endif // WI_SHADERINTEROP_WEATHER_H

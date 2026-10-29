@@ -3,6 +3,7 @@
 #include "globals.hlsli"
 
 #define HALF_FLT_MAX 65504.0
+#include "renegadeCloudFormations.hlsli"
 
 // Amazing noise and weather creation, modified from: https://github.com/greje656/clouds
 
@@ -416,12 +417,14 @@ float3 GetWeatherTypeMask(float3 weatherData)
 
 float4 GetHeightGradientType(float3 weatherTypeMask, LayerParameters parameters)
 {
-	return (parameters.layer.gradientSmall * weatherTypeMask.r) + (parameters.layer.gradientMedium * weatherTypeMask.g) + (parameters.layer.gradientLarge * weatherTypeMask.b);
+	if (parameters.layer.padding0 >= 1 && parameters.layer.padding0 <= 5) return RenegadeNativeFormationGradient(parameters.layer.padding0, weatherTypeMask);
+    return (parameters.layer.gradientSmall * weatherTypeMask.r) + (parameters.layer.gradientMedium * weatherTypeMask.g) + (parameters.layer.gradientLarge * weatherTypeMask.b);
 }
 
 float4 GetAnvilDeformationType(float3 weatherTypeMask, LayerParameters parameters)
 {
-	return (parameters.layer.anvilDeformationSmall * weatherTypeMask.r) + (parameters.layer.anvilDeformationMedium * weatherTypeMask.g) + (parameters.layer.anvilDeformationLarge * weatherTypeMask.b);
+	if (parameters.layer.padding0 >= 1 && parameters.layer.padding0 <= 5) return RenegadeNativeFormationAnvil(parameters.layer.padding0);
+    return (parameters.layer.anvilDeformationSmall * weatherTypeMask.r) + (parameters.layer.anvilDeformationMedium * weatherTypeMask.g) + (parameters.layer.anvilDeformationLarge * weatherTypeMask.b);
 }
 
 float SampleHeightGradient(float heightFraction, float3 weatherData, LayerParameters parameters)
@@ -447,10 +450,15 @@ float SampleAnvilDeformation(float heightFraction, float3 weatherData, LayerPara
 
 float3 SampleWeather(Texture2D<float4> texture_weatherMap, float3 p, float heightFraction, LayerParameters parameters)
 {
+    if (parameters.layer.padding0 == 1)
+        return RenegadeWholeCloudWeather(p, parameters.windOffset);
 	float2 pos = p.xz + parameters.coverageWindOffset;
 	pos += heightFraction * parameters.coverageWindDirection * parameters.layer.skewAlongCoverageWindDirection;
 	
-	float3 weatherData = texture_weatherMap.SampleLevel(sampler_linear_wrap, pos * parameters.layer.weatherScale, 0).rgb;
+	if (parameters.layer.padding0 >= 1 && parameters.layer.padding0 <= 5)
+        return float3(RenegadeFormationCoverage(pos, heightFraction, parameters.layer.coverageAmount, parameters.layer.padding0), texture_weatherMap.SampleLevel(sampler_linear_wrap, pos * parameters.layer.weatherScale * 4.0, 0).g, 0);
+
+    float3 weatherData = texture_weatherMap.SampleLevel(sampler_linear_wrap, pos * parameters.layer.weatherScale, 0).rgb;
 	
     // Apply effects for coverage
 	weatherData.r = RemapClamped(weatherData.r * parameters.layer.coverageAmount, 0.0, 1.0, parameters.layer.coverageMinimum, 1.0);
@@ -462,6 +470,7 @@ float3 SampleWeather(Texture2D<float4> texture_weatherMap, float3 p, float heigh
 
 bool ValidCloudDensity(float heightFraction, float3 weatherData, LayerParameters parameters)
 {
+    if (parameters.layer.padding0 >= 1 && parameters.layer.padding0 <= 5) return weatherData.r > 0;
 	float3 weatherTypeMask = GetWeatherTypeMask(weatherData);
 	
 	float4 heightGradient = GetHeightGradientType(weatherTypeMask, parameters);
@@ -482,7 +491,13 @@ bool ValidCloudDensityLayers(float heightFraction, float3 weatherDataFirst, floa
 
 float SampleCloudDensity(Texture3D<float4> texture_shapeNoise, Texture3D<float4> texture_detailNoise, Texture2D<float4> texture_curlNoise, float3 p, float heightFraction, LayerParameters parameters, float3 weatherData, float lod, bool sampleDetail)
 {
-	// When can estimate the bounding area of the clouds if we know the height on the heightfraction
+	// Renegade independent Cumulus experiment.
+    if (parameters.layer.padding0 == 1)
+        return RenegadeIndependentCumulus(texture_shapeNoise, texture_detailNoise,
+            p + float3(parameters.windOffset.x, 0, parameters.windOffset.z),
+            heightFraction, weatherData.rg, lod, sampleDetail, parameters.windOffset.y);
+
+    // When can estimate the bounding area of the clouds if we know the height on the heightfraction
 	if (!ValidCloudDensity(heightFraction, weatherData, parameters))
 	{
 		return 0.0;
