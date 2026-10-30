@@ -1896,6 +1896,19 @@ namespace wi::scene
 		float rain_speed = 1;
 		float rain_scale = 0.005f;
 		float rain_splash_scale = 0.1f;
+        // Renegade snow persists using the existing WeatherComponent fields
+        // (snow = no rain streaks AND no rain splash), but is rendered by
+        // an entirely independent particle emitter, never native rain.
+        constexpr bool HasNativeRain() const noexcept
+        {
+            return rain_amount > 0.0f &&
+                (rain_length > 0.005f || rain_splash_scale > 0.001f);
+        }
+        constexpr bool HasRenegadeSnow() const noexcept
+        {
+            return rain_amount > 0.0f && !HasNativeRain();
+        }
+
 		XMFLOAT4 rain_color = XMFLOAT4(0.6f, 0.8f, 1, 0.5f);
 
 		wi::Ocean::OceanParameters oceanParameters;

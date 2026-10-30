@@ -502,7 +502,16 @@ namespace wi
 			cb.xEmitterFrameRate = frameRate;
 			cb.xParticleGravity = gravity;
 			cb.xParticleDrag = drag;
-			XMStoreFloat3(&cb.xParticleVelocity, XMVector3TransformNormal(XMLoadFloat3(&velocity), XMLoadFloat4x4(&worldMatrix)));
+			// Snow spawn volume does not scale wind/fall speeds. Use actual
+			// authored world-metre/second velocity for the weather effect.
+			if (IsWeatherSnow())
+			{
+				cb.xParticleVelocity = velocity;
+			}
+			else
+			{
+				XMStoreFloat3(&cb.xParticleVelocity, XMVector3TransformNormal(XMLoadFloat3(&velocity), XMLoadFloat4x4(&worldMatrix)));
+			}
 			cb.xParticleRandomColorFactor = random_color;
 			cb.xEmitterLayerMask = layerMask;
 			cb.xEmitterInstanceIndex = instanceIndex;
@@ -531,6 +540,10 @@ namespace wi
 			if (IsTakeColorFromMesh())
 			{
 				cb.xEmitterOptions |= EMITTER_OPTION_BIT_TAKE_COLOR_FROM_MESH;
+			}
+			if (IsWeatherSnow())
+			{
+				cb.xEmitterOptions |= EMITTER_OPTION_BIT_WEATHER_SNOW;
 			}
 
 			// SPH:

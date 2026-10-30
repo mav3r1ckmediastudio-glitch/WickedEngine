@@ -78,7 +78,7 @@ namespace wi::scene
 			impostorInstanceOffset = uint32_t(instanceArraySize);
 			instanceArraySize += 1;
 		}
-		if (weathers.GetCount() > 0 && weathers[0].rain_amount > 0)
+		if (weathers.GetCount() > 0 && weathers[0].HasNativeRain())
 		{
 			rainInstanceOffset = uint32_t(instanceArraySize);
 			instanceArraySize += 1;
@@ -117,7 +117,7 @@ namespace wi::scene
 			impostorMaterialOffset = uint32_t(materialArraySize);
 			materialArraySize += 1;
 		}
-		if (weathers.GetCount() > 0 && weathers[0].rain_amount > 0)
+		if (weathers.GetCount() > 0 && weathers[0].HasNativeRain())
 		{
 			rainMaterialOffset = uint32_t(materialArraySize);
 			materialArraySize += 1;
@@ -308,7 +308,7 @@ namespace wi::scene
 			impostorGeometryOffset = uint32_t(geometryArraySize);
 			geometryArraySize += 1;
 		}
-		if (weathers.GetCount() > 0 && weathers[0].rain_amount > 0)
+		if (weathers.GetCount() > 0 && weathers[0].HasNativeRain())
 		{
 			rainGeometryOffset = uint32_t(geometryArraySize);
 			geometryArraySize += 1;
@@ -984,7 +984,7 @@ namespace wi::scene
         shaderscene.weather.night_padding = weather.shooting_stars;
         shaderscene.weather.night_alignment_padding = weather.shooting_star_preview_time;
 		XMStoreFloat4(&shaderscene.weather.stars_rotation, XMQuaternionNormalize(XMQuaternionInverse(XMLoadFloat4(&weather.stars_rotation_quaternion))));
-		shaderscene.weather.rain_amount = weather.rain_amount;
+		shaderscene.weather.rain_amount = weather.HasNativeRain() ? weather.rain_amount : 0.0f;
 		shaderscene.weather.rain_length = weather.rain_length;
 		shaderscene.weather.rain_speed = weather.rain_speed;
 		shaderscene.weather.rain_scale = weather.rain_scale;
@@ -5377,7 +5377,7 @@ namespace wi::scene
 			ocean.params = weather.oceanParameters;
 		}
 
-		if (weather.rain_amount > 0)
+		if (weather.HasNativeRain())
 		{
 			GraphicsDevice* device = wi::graphics::GetDevice();
 			rainEmitter.opacityCurveControlPeakStart = 0;
@@ -5512,7 +5512,7 @@ namespace wi::scene
 		}
 
 		wetmap_fadeout_time -= dt;
-		if (weather.IsOceanEnabled() || weather.rain_amount > 0)
+		if (weather.IsOceanEnabled() || weather.HasNativeRain())
 		{
 			wetmap_fadeout_time = 60; // allow 60 sec for remaining wetmaps to fade out
 		}

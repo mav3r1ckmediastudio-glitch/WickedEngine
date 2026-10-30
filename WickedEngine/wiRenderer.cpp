@@ -3959,7 +3959,7 @@ void UpdateVisibility(Visibility& vis)
 	}
 
 	// Shadow atlas packing:
-	if ((IsShadowsEnabled() && (vis.flags & Visibility::ALLOW_SHADOW_ATLAS_PACKING) && !vis.visibleLights.empty()) || vis.scene->weather.rain_amount > 0)
+	if ((IsShadowsEnabled() && (vis.flags & Visibility::ALLOW_SHADOW_ATLAS_PACKING) && !vis.visibleLights.empty()) || vis.scene->weather.HasNativeRain())
 	{
 		auto range = wi::profiler::BeginRangeCPU("Shadowmap packing");
 		float iterative_scaling = 1;
@@ -3967,7 +3967,7 @@ void UpdateVisibility(Visibility& vis)
 		while (iterative_scaling > 0.03f)
 		{
 			vis.shadow_packer.clear();
-			if (vis.scene->weather.rain_amount > 0)
+			if (vis.scene->weather.HasNativeRain())
 			{
 				// Rain blocker:
 				wi::rectpacker::Rect rect = {};
@@ -4254,7 +4254,7 @@ void UpdatePerFrameData(
 
 	frameCB.giboost_packed = wi::math::pack_half2(GetGIBoost(), 0);
 
-	if (scene.weather.rain_amount > 0)
+	if (scene.weather.HasNativeRain())
 	{
 		frameCB.rain_blocker_mad_prev = frameCB.rain_blocker_mad;
 		frameCB.rain_blocker_matrix_prev = frameCB.rain_blocker_matrix;
@@ -5738,7 +5738,7 @@ void UpdateRenderDataAsync(
 	}
 
 	// GPU Particle systems simulation/sorting/culling:
-	if (!vis.visibleEmitters.empty() || vis.scene->weather.rain_amount > 0)
+	if (!vis.visibleEmitters.empty() || vis.scene->weather.HasNativeRain())
 	{
 		auto range = wi::profiler::BeginRangeGPU("EmittedParticles - Simulate", cmd);
 		for (uint32_t emitterIndex : vis.visibleEmitters)
@@ -5751,7 +5751,7 @@ void UpdateRenderDataAsync(
 
 			emitter.UpdateGPU(instanceIndex, mesh, cmd);
 		}
-		if (vis.scene->weather.rain_amount > 0)
+		if (vis.scene->weather.HasNativeRain())
 		{
 			vis.scene->rainEmitter.UpdateGPU(vis.scene->rainInstanceOffset, nullptr, cmd);
 		}
@@ -5905,7 +5905,7 @@ void UpdateRaytracingAccelerationStructures(const Scene& scene, CommandList cmd)
 				}
 			}
 
-			if (scene.weather.rain_amount > 0 && scene.rainEmitter.BLAS.IsValid())
+			if (scene.weather.HasNativeRain() && scene.rainEmitter.BLAS.IsValid())
 			{
 				device->BuildRaytracingAccelerationStructure(&scene.rainEmitter.BLAS, cmd, nullptr);
 			}
@@ -6142,7 +6142,7 @@ void DrawSoftParticles(
 )
 {
 	size_t emitterCount = vis.visibleEmitters.size();
-	if (emitterCount == 0 && vis.scene->weather.rain_amount == 0)
+	if (emitterCount == 0 && !vis.scene->weather.HasNativeRain())
 		return;
 	
 	auto range = distortion ?
@@ -6188,13 +6188,13 @@ void DrawSoftParticles(
 		}
 	}
 
-	if (distortion && vis.scene->weather.rain_amount > 0)
+	if (distortion && vis.scene->weather.HasNativeRain())
 	{
 		// Draw with distortion shader override:
 		EmittedParticleSystem::PARTICLESHADERTYPE shader = EmittedParticleSystem::PARTICLESHADERTYPE::SOFT_DISTORTION;
 		vis.scene->rainEmitter.Draw(vis.scene->rainMaterial, cmd, &shader);
 	}
-	else if (!distortion && vis.scene->weather.rain_amount > 0)
+	else if (!distortion && vis.scene->weather.HasNativeRain())
 	{
 		// Draw normally
 		vis.scene->rainEmitter.Draw(vis.scene->rainMaterial, cmd);
@@ -6839,7 +6839,7 @@ void DrawShadowmaps(
 		return;
 	if (!shadowMapAtlas.IsValid())
 		return;
-	if (vis.visibleLights.empty() && vis.scene->weather.rain_amount <= 0)
+	if (vis.visibleLights.empty() && !vis.scene->weather.HasNativeRain())
 		return;
 
 	device->EventBegin("DrawShadowmaps", cmd);
@@ -7492,7 +7492,7 @@ void DrawShadowmaps(
 	}
 
 	// Rain blocker:
-	if (vis.scene->weather.rain_amount > 0)
+	if (vis.scene->weather.HasNativeRain())
 	{
 		SHCAM shcam;
 		CreateDirLightShadowCams(vis.scene->rain_blocker_dummy_light, *vis.camera, &shcam, 1, vis.rain_blocker_shadow_rect);
@@ -11540,7 +11540,7 @@ void RefreshWetmaps(const Visibility& vis, CommandList cmd)
 	device->BindComputeShader(&shaders[CSTYPE_WETMAP_UPDATE], cmd);
 
 	WetmapPush push = {};
-	push.rain_amount = vis.scene->weather.rain_amount;
+	push.rain_amount = vis.scene->weather.HasNativeRain() ? vis.scene->weather.rain_amount : 0.0f;
 
 	// Note: every object wetmap is updated, not just visible
 	for (uint32_t objectIndex = 0; objectIndex < vis.scene->objects.GetCount(); ++objectIndex)

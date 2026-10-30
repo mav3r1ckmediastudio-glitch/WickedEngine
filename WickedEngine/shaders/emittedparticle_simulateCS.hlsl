@@ -59,6 +59,28 @@ void main(uint3 DTid : SV_DispatchThreadID, uint Gid : SV_GroupIndex)
 
 	// drag: 
 	particle.velocity *= xParticleDrag;
+
+	// Renegade weather snow ONLY. Continuously follow the evolving scene wind
+	// instead of fixing velocity at emission; no effect on other emitters.
+	[branch]
+	if (xEmitterOptions & EMITTER_OPTION_BIT_WEATHER_SNOW)
+	{
+		const float3 direction = GetWeather().wind.direction;
+		const float speed = max(0.0f, GetWeather().wind.speed);
+		const float turbulence = clamp(GetWeather().wind.randomness, 0.0f, 20.0f);
+		const float time = GetFrame().time;
+		const float phase = particle.position.x * 0.27f +
+			particle.position.z * 0.19f + (float)particleIndex * 0.029f;
+		const float gust = sin(time * 1.6f + phase) *
+			cos(time * 0.63f - phase * 0.52f);
+		const float2 curl = float2(
+			sin(time * 0.9f + particle.position.z * 0.43f),
+			cos(time * 0.84f + particle.position.x * 0.39f));
+		const float2 desired = direction.xz * speed * (0.34f + 0.15f * gust) +
+			curl * turbulence * 0.075f;
+		particle.velocity.xz = lerp(particle.velocity.xz, desired,
+			saturate(dt * 1.5f));
+	}
 		
 	// Blocker shadow map check using previous frame:
 	//	This is extended with blocker position calculation for splashing
