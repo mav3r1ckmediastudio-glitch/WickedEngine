@@ -463,8 +463,15 @@ float3 RenegadeSheetLightningRadiance(float3 worldPosition)
     float c = saturate(1.0f - (0.89f*d2.x*d2.x +
          2.00f*d2.y*d2.y + 1.02f*d2.z*d2.z + 0.17f*d2.x*d2.z) /
          max(cell2.w * cell2.w, 1.0f));
-    float illumination = (energy.x * a * a + energy.y * b * b +
-                          energy.z * c * c);
+    // Keep the centre energy bounded, but feather the last part of each
+    // expanded radius instead of leaving an identifiable illuminated edge.
+    // Unequal falloff widths combined with event-randomised cell radii give
+    // each cloud flash a slightly different shape without extra samples.
+    float falloffA = a * a * smoothstep(0.0f, 0.42f, a);
+    float falloffB = b * b * smoothstep(0.0f, 0.49f, b);
+    float falloffC = c * c * smoothstep(0.0f, 0.36f, c);
+    float illumination = (energy.x * falloffA + energy.y * falloffB +
+                          energy.z * falloffC);
     return float3(0.75f, 0.84f, 1.0f) * illumination * 12.0f;
 }
 
