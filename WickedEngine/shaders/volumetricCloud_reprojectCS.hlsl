@@ -33,6 +33,24 @@ void cloudmap_fallback(float depth, float3 V, inout float4 result)
 void main(uint3 DTid : SV_DispatchThreadID)
 {
 	const float2 uv = (DTid.xy + 0.5f) * postprocess.resolution_rcp;
+
+    // G4 sheet lightning changes cloud radiance much faster than the
+    // 4-phase checkerboard history can converge. During the very short
+    // emission pulse, resolve the *current* half-resolution cloud raymarch
+    // smoothly for all four sub-pixels, not alternating bright new samples
+    // with old dark history. Invalidate history so the post-flash frame
+    // rebuilds without a persistent glow. No effect when lightning is off.
+    float3 sheetEnergy = GetWeather().sheet_light_power.xyz;
+    [branch]
+    if (max(max(sheetEnergy.x, sheetEnergy.y), sheetEnergy.z) > 0.0001f)
+    {
+        output[DTid.xy] =
+            cloud_current.SampleLevel(sampler_linear_clamp, uv, 0);
+        output_depth[DTid.xy] =
+            cloud_depth_current.SampleLevel(sampler_linear_clamp, uv, 0);
+        output_additional[DTid.xy] = 0.0f;
+        return;
+    }
 	
 	uint2 renderResolution = postprocess.resolution / 2;
 	uint2 renderCoord = DTid.xy / 2;

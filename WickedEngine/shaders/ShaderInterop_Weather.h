@@ -397,6 +397,10 @@ struct alignas(16) ShaderWeather
 	VolumetricCloudParameters volumetric_clouds;
     float4 moon_parameters;
     float4 moon_orbit;
+    float4 sheet_light_cell0;
+    float4 sheet_light_cell1;
+    float4 sheet_light_cell2;
+    float4 sheet_light_power;
 };
 
 #endif // WI_SHADERINTEROP_WEATHER_H

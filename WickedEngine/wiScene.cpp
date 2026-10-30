@@ -977,6 +977,10 @@ namespace wi::scene
         shaderscene.weather.night_padding = XMFLOAT3(0,0,0);
         shaderscene.weather.moon_parameters = weather.moon_parameters;
         shaderscene.weather.moon_orbit = weather.moon_orbit;
+        shaderscene.weather.sheet_light_cell0 = weather.sheet_light_cell0;
+        shaderscene.weather.sheet_light_cell1 = weather.sheet_light_cell1;
+        shaderscene.weather.sheet_light_cell2 = weather.sheet_light_cell2;
+        shaderscene.weather.sheet_light_power = weather.sheet_light_power;
         shaderscene.weather.night_padding = weather.shooting_stars;
         shaderscene.weather.night_alignment_padding = weather.shooting_star_preview_time;
 		XMStoreFloat4(&shaderscene.weather.stars_rotation, XMQuaternionNormalize(XMQuaternionInverse(XMLoadFloat4(&weather.stars_rotation_quaternion))));

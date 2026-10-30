@@ -434,6 +434,31 @@ float3 SampleLocalLights(float3 worldPosition)
 	return localLightLuminance;
 }
 
+// G4 sheet lightning: an in-cloud emission field evaluated at existing
+// raymarch samples. Distances are float32 in metres; generic point-light
+// attenuation uses half precision and loses useful range at cloud altitudes.
+// This adds NO raymarch/shadow samples and draws NO visible lightning bolts.
+float3 RenegadeSheetLightningRadiance(float3 worldPosition)
+{
+    float3 energy = GetWeather().sheet_light_power.xyz;
+    [branch]
+    if (max(max(energy.x, energy.y), energy.z) <= 0.00001f)
+        return 0.0f;
+
+    float4 cell0 = GetWeather().sheet_light_cell0;
+    float4 cell1 = GetWeather().sheet_light_cell1;
+    float4 cell2 = GetWeather().sheet_light_cell2;
+    float3 d0 = worldPosition - cell0.xyz;
+    float3 d1 = worldPosition - cell1.xyz;
+    float3 d2 = worldPosition - cell2.xyz;
+    float a = saturate(1.0f - dot(d0,d0) / max(cell0.w * cell0.w, 1.0f));
+    float b = saturate(1.0f - dot(d1,d1) / max(cell1.w * cell1.w, 1.0f));
+    float c = saturate(1.0f - dot(d2,d2) / max(cell2.w * cell2.w, 1.0f));
+    float illumination = (energy.x * a * a + energy.y * b * b +
+                          energy.z * c * c);
+    return float3(0.75f, 0.84f, 1.0f) * illumination * 12.0f;
+}
+
 void VolumetricCloudLighting(AtmosphereParameters atmosphere, float3 startPosition, float3 worldPosition, float3 sunDirection, float3 sunIlluminance, float cosTheta, float stepSize, float heightFraction, float3 moonSoftFill,
 	float cloudDensityFirst, float cloudDensitySecond, float3 weatherDataFirst, float3 weatherDataSecond,
 	LayerParameters layerParametersFirst, LayerParameters layerParametersSecond, float lod,
@@ -500,8 +525,11 @@ void VolumetricCloudLighting(AtmosphereParameters atmosphere, float3 startPositi
 	depthWeightsSum += depthWeight;
 
 	
-	// Sample local lights
+	// Sample local lights. Sheet lightning is a separate cloud-scale
+	// emission field, scattered by the existing cloud density and attenuated
+	// along the ray; it never uses ordinary world-light attenuation.
 	float3 localLightLuminance = SampleLocalLights(worldPosition);
+	float3 sheetLightning = RenegadeSheetLightningRadiance(worldPosition);
 
 	
 	// Analytical scattering integration based on multiple scattering
@@ -516,6 +544,7 @@ void VolumetricCloudLighting(AtmosphereParameters atmosphere, float3 startPositi
 		float3 lightLuminance = transmittanceToLight * sunIlluminance * participatingMediaPhase.phase[ms];
 		lightLuminance += (ms == 0 ? environmentLuminance : float3(0.0, 0.0, 0.0)); // only apply at last
 		lightLuminance += localLightLuminance;
+		lightLuminance += (ms == 0 ? sheetLightning : float3(0, 0, 0));
 
 		const float3 scatteredLuminance = (lightLuminance * scatteringCoefficients); // + emission. Light can be emitted when media reach high heat. Could be used to make lightning
 		

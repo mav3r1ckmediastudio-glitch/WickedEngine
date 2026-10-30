@@ -1884,6 +1884,11 @@ namespace wi::scene
         XMFLOAT4 moon_orbit = XMFLOAT4(0,35,1,0);
         XMFLOAT3 shooting_stars = XMFLOAT3(0,1,8);
         float shooting_star_preview_time = -1000;
+        // G4 transient sheet lightning; not persisted in the scene file.
+        XMFLOAT4 sheet_light_cell0 = {};
+        XMFLOAT4 sheet_light_cell1 = {};
+        XMFLOAT4 sheet_light_cell2 = {};
+        XMFLOAT4 sheet_light_power = {};
 		XMFLOAT3 gravity = XMFLOAT3(0, -10, 0);
 		float sky_rotation = 0; // horizontal rotation for skyMap texture (in radians)
 		float rain_amount = 0;
