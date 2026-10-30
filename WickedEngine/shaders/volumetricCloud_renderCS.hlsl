@@ -451,9 +451,18 @@ float3 RenegadeSheetLightningRadiance(float3 worldPosition)
     float3 d0 = worldPosition - cell0.xyz;
     float3 d1 = worldPosition - cell1.xyz;
     float3 d2 = worldPosition - cell2.xyz;
-    float a = saturate(1.0f - dot(d0,d0) / max(cell0.w * cell0.w, 1.0f));
-    float b = saturate(1.0f - dot(d1,d1) / max(cell1.w * cell1.w, 1.0f));
-    float c = saturate(1.0f - dot(d2,d2) / max(cell2.w * cell2.w, 1.0f));
+    // Broad, oblique, shallow discharges instead of spherical bright discs.
+    // Differently oriented lobes overlap inside the cloud body; scattering
+    // and existing optical depth mask their edges naturally.
+    float a = saturate(1.0f - (0.72f*d0.x*d0.x +
+         2.10f*d0.y*d0.y + 1.18f*d0.z*d0.z + 0.25f*d0.x*d0.z) /
+         max(cell0.w * cell0.w, 1.0f));
+    float b = saturate(1.0f - (1.14f*d1.x*d1.x +
+         2.30f*d1.y*d1.y + 0.74f*d1.z*d1.z - 0.22f*d1.x*d1.z) /
+         max(cell1.w * cell1.w, 1.0f));
+    float c = saturate(1.0f - (0.89f*d2.x*d2.x +
+         2.00f*d2.y*d2.y + 1.02f*d2.z*d2.z + 0.17f*d2.x*d2.z) /
+         max(cell2.w * cell2.w, 1.0f));
     float illumination = (energy.x * a * a + energy.y * b * b +
                           energy.z * c * c);
     return float3(0.75f, 0.84f, 1.0f) * illumination * 12.0f;

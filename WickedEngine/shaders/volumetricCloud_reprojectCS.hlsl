@@ -34,18 +34,31 @@ void main(uint3 DTid : SV_DispatchThreadID)
 {
 	const float2 uv = (DTid.xy + 0.5f) * postprocess.resolution_rcp;
 
-    // G4 sheet lightning changes cloud radiance much faster than the
-    // 4-phase checkerboard history can converge. During the very short
-    // emission pulse, resolve the *current* half-resolution cloud raymarch
-    // smoothly for all four sub-pixels, not alternating bright new samples
-    // with old dark history. Invalidate history so the post-flash frame
-    // rebuilds without a persistent glow. No effect when lightning is off.
-    float3 sheetEnergy = GetWeather().sheet_light_power.xyz;
+    // G4 lightning pulses defeat the ordinary four-phase temporal history.
+    // Resolve the freshly marched quarter-resolution cloud neighborhood to
+    // suppress the exposed checkerboard, then use a modest amount of the
+    // previous resolved frame to stabilize the pulse. Keep this fast path
+    // for a brief recovery after the flash ends to clear bright history.
+    // In quiet weather the normal temporal reconstruction is untouched.
+    float4 sheetPower = GetWeather().sheet_light_power;
+    float sheetEnergy = max(max(sheetPower.x, sheetPower.y), sheetPower.z);
     [branch]
-    if (max(max(sheetEnergy.x, sheetEnergy.y), sheetEnergy.z) > 0.0001f)
+    if (sheetEnergy > 0.0001f || sheetPower.w > 0.5f)
     {
-        output[DTid.xy] =
-            cloud_current.SampleLevel(sampler_linear_clamp, uv, 0);
+        // postprocess.resolution is the output half-res image; cloud_current
+        // has half its dimensions (quarter of viewport in each axis).
+        const float2 srcTexel = 2.0f * postprocess.resolution_rcp;
+        float4 center = cloud_current.SampleLevel(sampler_linear_clamp, uv, 0);
+        float4 cross =
+            cloud_current.SampleLevel(sampler_linear_clamp, uv + float2(srcTexel.x, 0), 0) +
+            cloud_current.SampleLevel(sampler_linear_clamp, uv - float2(srcTexel.x, 0), 0) +
+            cloud_current.SampleLevel(sampler_linear_clamp, uv + float2(0, srcTexel.y), 0) +
+            cloud_current.SampleLevel(sampler_linear_clamp, uv - float2(0, srcTexel.y), 0);
+        float4 spatial = lerp(center, cross * 0.25f, 0.38f);
+        float4 previous = cloud_history.SampleLevel(sampler_linear_clamp, uv, 0);
+        float historyWeight = volumetricclouds_frame > 0
+            ? (sheetEnergy > 0.0001f ? 0.24f : 0.12f) : 0.0f;
+        output[DTid.xy] = lerp(spatial, previous, historyWeight);
         output_depth[DTid.xy] =
             cloud_depth_current.SampleLevel(sampler_linear_clamp, uv, 0);
         output_additional[DTid.xy] = 0.0f;
