@@ -504,7 +504,7 @@ namespace wi
 			cb.xParticleDrag = drag;
 			// Snow spawn volume does not scale wind/fall speeds. Use actual
 			// authored world-metre/second velocity for the weather effect.
-			if (IsWeatherSnow())
+			if (IsWeatherSnow() || IsWeatherRain())
 			{
 				cb.xParticleVelocity = velocity;
 			}

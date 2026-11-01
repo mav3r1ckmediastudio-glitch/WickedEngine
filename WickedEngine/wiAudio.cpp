@@ -608,6 +608,15 @@ namespace wi::audio
 		return 0ull;
 	}
 
+    uint32_t GetQueuedBufferCount(const SoundInstance* instance)
+    {
+        if(!instance || !instance->IsValid()) return 0;
+        auto internal=to_internal(instance);
+        XAUDIO2_VOICE_STATE state={};
+        if(internal->sourceVoice)internal->sourceVoice->GetState(&state,XAUDIO2_VOICE_NOSAMPLESPLAYED);
+        return state.BuffersQueued;
+    }
+
 	void SetSubmixVolume(SUBMIX_TYPE type, float volume)
 	{
 		if(audio_internal->submixVoices[type] != nullptr)

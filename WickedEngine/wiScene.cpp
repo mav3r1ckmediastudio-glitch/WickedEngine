@@ -855,14 +855,20 @@ namespace wi::scene
 
 		if (weather.IsVolumetricClouds())
 		{
-			if (!cloudmap.IsValid())
+            // The hemispherical cache feeds sky lighting/reflections. Visible
+            // camera clouds retain their full existing raymarch/history buffers.
+            const float formation=weather.volumetricCloudParameters.layerFirst.padding0;
+            const bool reference=wi::arguments::HasArgument("cloud-capture-reference");
+            const uint32_t captureResolution=formation>=1 && formation<=5 && !reference ?
+                std::min(cloudmap_resolution,128u) : cloudmap_resolution;
+			if (!cloudmap.IsValid() || cloudmap.GetDesc().width!=captureResolution)
 			{
 				cloudmap_frame = 0;
 
 				TextureDesc desc;
 				desc.format = Format::R16G16B16A16_FLOAT;
-				desc.width = cloudmap_resolution;
-				desc.height = cloudmap_resolution;
+				desc.width = captureResolution;
+				desc.height = captureResolution;
 				desc.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::UNORDERED_ACCESS;
 				bool success = device->CreateTexture(&desc, nullptr, &cloudmap);
 				assert(success);
@@ -5385,20 +5391,25 @@ namespace wi::scene
 			rainEmitter.shaderType = wi::EmittedParticleSystem::PARTICLESHADERTYPE::SOFT_LIGHTING;
 			rainEmitter.SetCollidersDisabled(true);
 			rainEmitter.SetVolumeEnabled(true);
-			constexpr uint32_t target_max_particle_count = 1000000;
+			rainEmitter.SetWeatherRain(true);
+			constexpr uint32_t target_max_particle_count = 120000;
 			if (rainEmitter.GetMaxParticleCount() != target_max_particle_count)
 			{
 				rainEmitter.SetMaxParticleCount(target_max_particle_count);
 			}
-			rainEmitter.count = wi::math::Lerp(0, (float)target_max_particle_count, weather.rain_amount);
+			rainEmitter.count = weather.GetNativeRainEmissionRate();
 			rainEmitter.life = 1;
 			rainEmitter.size = weather.rain_scale;
-			rainEmitter.random_factor = weather.windRandomness;
+			// This parameter randomizes PARTICLE SIZE, not just wind gusts.
+            // Passing global turbulence (up to 20) directly creates
+            // oversized/negative drops and a solid overdraw curtain.
+            rainEmitter.random_factor =
+                weather.GetNativeRainDropSizeJitter();
 			rainEmitter.random_life = 1;
 			rainEmitter.motionBlurAmount = weather.rain_length;
 			rainEmitter.velocity = XMFLOAT3(
 				weather.windDirection.x * weather.windSpeed,
-				-weather.rain_speed,
+				-weather.GetNativeRainFallMetresPerSecond(),
 				weather.windDirection.z * weather.windSpeed
 			);
 			rainMaterial.SetUseVertexColors(true);

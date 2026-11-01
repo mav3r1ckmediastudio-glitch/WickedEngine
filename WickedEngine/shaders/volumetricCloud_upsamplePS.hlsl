@@ -5,6 +5,7 @@ PUSHCONSTANT(postprocess, PostProcess);
 
 Texture2D<float4> cloud_current : register(t0);
 Texture2D<float2> cloud_depth_current : register(t1);
+Texture2D<float4> lightning_current : register(t2);
 
 static const int UPSAMPLE_SAMPLE_RADIUS = 1;
 
@@ -56,6 +57,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 	{
 		// small error, take bilinear sample:
 		result = cloud_current.SampleLevel(sampler_linear_clamp, uv, 0);
+        result.rgb += lightning_current.SampleLevel(sampler_linear_clamp, uv, 0).rgb;
 	}
 	else
 	{
@@ -75,6 +77,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 				float2 neighborReprojectionUV = (neighborReprojectionCoord + 0.5) / reprojectionResolution;
 			
 				half4 cloudResult = cloud_current.SampleLevel(sampler_linear_clamp, neighborReprojectionUV, 0);
+                cloudResult.rgb += lightning_current.SampleLevel(sampler_linear_clamp, neighborReprojectionUV, 0).rgb;
 				half cloudDepth = cloud_depth_current[neighborReprojectionCoord].g;
 				
 				float spatialWeight = Gaussian(length(float2(offset)), GAUSSIAN_SIGMA_SPATIAL);

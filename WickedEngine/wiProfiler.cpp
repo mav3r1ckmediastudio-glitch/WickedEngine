@@ -20,6 +20,10 @@
 #include <mutex>
 #include <atomic>
 #include <sstream>
+#include <fstream>
+#include <cstdlib>
+#include <iomanip>
+#include <vector>
 
 using namespace wi::graphics;
 
@@ -36,6 +40,17 @@ namespace wi::profiler
 	std::atomic<uint32_t> nextQuery{ 0 };
 	uint32_t queryheap_idx = 0;
 	bool drawn_this_frame = false;
+    uint64_t queryFrame[arraysize(queryResultBuffer)] = {};
+    // Diagnostic only; raw timestamp rows precede the overlay's 20-frame smoothing.
+    struct DeferredTimingCSV : std::ostringstream
+    {
+        std::string path;
+        void open(const char* p){path=p;}
+        explicit operator bool() const{return !path.empty();}
+        ~DeferredTimingCSV(){if(!path.empty()){std::ofstream out(path);out<<str();}}
+    };
+    DeferredTimingCSV timingCSV;
+    bool timingCSVChecked = false;
 	wi::Color background_color = wi::Color(20, 20, 20, 230);
 	wi::Color text_color = wi::Color::White();
 
@@ -64,6 +79,13 @@ namespace wi::profiler
 
 	void BeginFrame()
 	{
+        if(!timingCSVChecked){
+            timingCSVChecked=true;
+            if(const char* path=std::getenv("RENEGADE_G4_GPU_TIMINGS")){
+                timingCSV.open(path);timingCSV<<"frame,kind,range,milliseconds,local_usage_bytes,local_budget_bytes\n";
+                timingCSV<<std::setprecision(9);ENABLED_REQUEST=true;
+            }
+        }
 		if (ENABLED_REQUEST != ENABLED)
 		{
 			ranges.clear();
@@ -116,18 +138,21 @@ namespace wi::profiler
 		// This should be done before we begin reallocating new queries for current buffer index
 		const uint64_t* queryResults = (const uint64_t*)queryResultBuffer[queryheap_idx].mapped_data;
 		double gpu_frequency = (double)device->GetTimestampFrequency() / 1000.0;
+        auto diagnosticMemory = timingCSV ? device->GetMemoryUsage() : GraphicsDevice::MemoryUsage{};
 		for (auto& x : ranges)
 		{
 			auto& range = x.second;
 			if (!range.in_use)
 				continue;
 
+			bool measured = range.IsCPURange();
 			if (!range.IsCPURange())
 			{
 				const int begin_idx = range.gpuBegin[queryheap_idx];
 				const int end_idx = range.gpuEnd[queryheap_idx];
 				if (queryResults != nullptr && begin_idx >= 0 && end_idx >= 0)
 				{
+					measured=true;
 					const uint64_t begin_result = queryResults[begin_idx];
 					const uint64_t end_result = queryResults[end_idx];
 					range.time = (float)abs((double)(end_result - begin_result) / gpu_frequency);
@@ -140,6 +165,13 @@ namespace wi::profiler
 				range.gpuBegin[queryheap_idx] = -1;
 				range.gpuEnd[queryheap_idx] = -1;
 			}
+            if(timingCSV && measured){
+                const bool cpu=range.IsCPURange();
+                const auto& memory=diagnosticMemory;
+                timingCSV<<(cpu?device->GetFrameCount()-1:queryFrame[queryheap_idx])
+                    <<','<<(cpu?"CPU":"GPU")<<','<<range.name<<','<<range.time
+                    <<','<<memory.usage<<','<<memory.budget<<'\n';
+            }
 			range.times[range.avg_counter++ % arraysize(range.times)] = range.time;
 
 			if (range.avg_counter > arraysize(range.times))
@@ -188,6 +220,7 @@ namespace wi::profiler
 			cmd
 		);
 
+		queryFrame[queryheap_idx]=device->GetFrameCount();
 		nextQuery.store(0);
 	}
 
@@ -326,7 +359,7 @@ namespace wi::profiler
 		ColorSpace colorspace
 	)
 	{
-		if (!ENABLED || !ENABLED_REQUEST || !initialized || drawn_this_frame)
+		if (timingCSV || !ENABLED || !ENABLED_REQUEST || !initialized || drawn_this_frame)
 			return;
 		drawn_this_frame = true;
 

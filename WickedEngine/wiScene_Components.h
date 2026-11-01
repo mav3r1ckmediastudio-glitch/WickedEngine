@@ -1908,6 +1908,29 @@ namespace wi::scene
         {
             return rain_amount > 0.0f && !HasNativeRain();
         }
+        // Rain gets an explicit, bounded density curve rather than the
+        // original million drops/second. Only real rain enters this path.
+        float GetNativeRainEmissionRate() const noexcept
+        {
+            if (!HasNativeRain())
+                return 0.0f;
+            const float i = std::clamp(rain_amount, 0.0f, 1.0f);
+            return 11000.0f * i + 85000.0f * i * i;
+        }
+        float GetNativeRainFallMetresPerSecond() const noexcept
+        {
+            if (!HasNativeRain())
+                return 0.0f;
+            return std::clamp(rain_speed, 0.01f, 2.0f) * 13.0f;
+        }
+        float GetNativeRainDropSizeJitter() const noexcept
+        {
+            if (!HasNativeRain())
+                return 0.0f;
+            // Particle random_factor changes SIZE too; never feed the
+            // authored global wind turbulence directly as size jitter.
+            return std::clamp(windRandomness * 0.06f, 0.10f, 0.90f);
+        }
 
 		XMFLOAT4 rain_color = XMFLOAT4(0.6f, 0.8f, 1, 0.5f);
 

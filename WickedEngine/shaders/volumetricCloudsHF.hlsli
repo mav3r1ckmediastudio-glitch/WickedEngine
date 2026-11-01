@@ -450,6 +450,15 @@ float SampleAnvilDeformation(float heightFraction, float3 weatherData, LayerPara
 
 float3 SampleWeather(Texture2D<float4> texture_weatherMap, float3 p, float heightFraction, LayerParameters parameters)
 {
+    // A disabled native layer has exactly zero coverage/density. Its albedo
+    // contribution is also zero for positive powder exponent. Avoid its
+    // weather fetch and all later density work; Renegade formations untouched.
+    [branch]
+    if(parameters.layer.padding0 == 0 &&
+       parameters.layer.coverageAmount == 0 && parameters.layer.coverageMinimum == 0 &&
+       GetWeather().volumetric_clouds.beerPowderPower > 0)
+        return 0;
+
     if (parameters.layer.padding0 == 1)
         return RenegadeWholeCloudWeather(p, parameters.windOffset);
 	float2 pos = p.xz + parameters.coverageWindOffset;
@@ -471,6 +480,10 @@ float3 SampleWeather(Texture2D<float4> texture_weatherMap, float3 p, float heigh
 bool ValidCloudDensity(float heightFraction, float3 weatherData, LayerParameters parameters)
 {
     if (parameters.layer.padding0 >= 1 && parameters.layer.padding0 <= 5) return weatherData.r > 0;
+    // Anvil deformation is saturated to [0,1], so this native coverage can
+    // never pass the existing >0.05 test. Do not compute gradient/powers.
+    if(weatherData.r <= 0.05f) return false;
+
 	float3 weatherTypeMask = GetWeatherTypeMask(weatherData);
 	
 	float4 heightGradient = GetHeightGradientType(weatherTypeMask, parameters);

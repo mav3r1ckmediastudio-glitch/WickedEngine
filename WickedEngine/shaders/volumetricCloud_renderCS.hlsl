@@ -37,6 +37,9 @@ Texture2D<float4> texture_weatherMapSecond : register(t4);
 
 RWTexture2D<float4> texture_render : register(u0);
 RWTexture2D<float2> texture_cloudDepth : register(u1);
+#ifndef VOLUMETRICCLOUD_CAPTURE
+RWTexture2D<float4> texture_lightning : register(u2);
+#endif
 
 struct Variance
 {
@@ -95,7 +98,9 @@ struct VariancePacked
 		return ret;
 	}
 };
+#ifdef VOLUMETRICCLOUD_CAPTURE
 RWStructuredBuffer<VariancePacked> variance_data : register(u2);
+#endif
 
 static const uint2 halfResIndexToCoordinateOffset[4] = { uint2(0, 0), uint2(1, 0), uint2(0, 1), uint2(1, 1) };
 
@@ -478,7 +483,7 @@ float3 RenegadeSheetLightningRadiance(float3 worldPosition)
 void VolumetricCloudLighting(AtmosphereParameters atmosphere, float3 startPosition, float3 worldPosition, float3 sunDirection, float3 sunIlluminance, float cosTheta, float stepSize, float heightFraction, float3 moonSoftFill,
 	float cloudDensityFirst, float cloudDensitySecond, float3 weatherDataFirst, float3 weatherDataSecond,
 	LayerParameters layerParametersFirst, LayerParameters layerParametersSecond, float lod,
-	inout float3 luminance, inout float3 transmittanceToView, inout float depthWeightedSum, inout float depthWeightsSum)
+	inout float3 luminance, inout float3 lightningLuminance, inout float3 transmittanceToView, inout float depthWeightedSum, inout float depthWeightsSum)
 {
 	// Setup base parameters
 	float3 albedo = SampleAlbedo(cloudDensityFirst, cloudDensitySecond, weatherDataFirst, weatherDataSecond);
@@ -545,7 +550,10 @@ void VolumetricCloudLighting(AtmosphereParameters atmosphere, float3 startPositi
 	// emission field, scattered by the existing cloud density and attenuated
 	// along the ray; it never uses ordinary world-light attenuation.
 	float3 localLightLuminance = SampleLocalLights(worldPosition);
-	float3 sheetLightning = RenegadeSheetLightningRadiance(worldPosition);
+	float3 sheetLightning = 0;
+#ifndef VOLUMETRICCLOUD_CAPTURE
+    sheetLightning = RenegadeSheetLightningRadiance(worldPosition);
+#endif
 
 	
 	// Analytical scattering integration based on multiple scattering
@@ -560,7 +568,7 @@ void VolumetricCloudLighting(AtmosphereParameters atmosphere, float3 startPositi
 		float3 lightLuminance = transmittanceToLight * sunIlluminance * participatingMediaPhase.phase[ms];
 		lightLuminance += (ms == 0 ? environmentLuminance : float3(0.0, 0.0, 0.0)); // only apply at last
 		lightLuminance += localLightLuminance;
-		lightLuminance += (ms == 0 ? sheetLightning : float3(0, 0, 0));
+
 
 		const float3 scatteredLuminance = (lightLuminance * scatteringCoefficients); // + emission. Light can be emitted when media reach high heat. Could be used to make lightning
 		
@@ -568,6 +576,8 @@ void VolumetricCloudLighting(AtmosphereParameters atmosphere, float3 startPositi
 		const float3 clampedExtinctionCoefficients = max(extinctionCoefficients, 0.0000001);
 		const float3 sampleTransmittance = exp(-clampedExtinctionCoefficients * stepSize);
 		float3 luminanceIntegral = (scatteredLuminance - scatteredLuminance * sampleTransmittance) / clampedExtinctionCoefficients; // integrate along the current step segment
+		if(ms == 0)
+            lightningLuminance += transmittanceToView * sheetLightning * scatteringCoefficients * (1.0 - sampleTransmittance) / clampedExtinctionCoefficients;
 		luminance += transmittanceToView * luminanceIntegral; // accumulate and also take into account the transmittance from previous steps
 
 		if (ms == 0)
@@ -591,7 +601,7 @@ float CalculateAtmosphereBlend(float tDepth)
 	return fade;
 }
  
-void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition, float3 rayOrigin, float3 rayDirection, inout float4 cloudColor, inout float2 cloudDepth)
+void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition, float3 rayOrigin, float3 rayDirection, inout float4 cloudColor, inout float2 cloudDepth, inout float3 lightningColor)
 {
 	AtmosphereParameters atmosphere = GetWeather().atmosphere;
 	
@@ -671,6 +681,13 @@ void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition,
             // Distant rays permit wider steps, where perspective and temporal
             // integration resolve fine-scale structure without uniform 384 steps.
             steps = clamp(ceil((tMax - tMin) / (64.0 + 80.0 * saturate((tMin - 3000.0) / 10000.0))), 1.0, 384.0);
+#ifdef VOLUMETRICCLOUD_CAPTURE
+        // The lower angular-resolution hemisphere is a lighting/reflection cache.
+        // Integrate over longer intervals there; preserve the full camera kernel.
+        if(GetWeather().volumetric_clouds.layerFirst.padding0>=1 &&
+            GetWeather().volumetric_clouds.layerFirst.padding0<=5)
+            steps=max(1.0,ceil(steps/max(1.0,postprocess.params1.y)));
+#endif
         stepSize = (tMax - tMin) / steps;
 		
 		//float offset = dither(DTid.xy + GetTemporalAASampleRotation());
@@ -700,6 +717,7 @@ void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition,
 
 	
 	float3 luminance = 0.0;
+    float3 lightningLuminance = 0.0;
 	float3 transmittanceToView = 1.0;
 	float depthWeightedSum = 0.0;
 	float depthWeightsSum = 0.0;
@@ -749,7 +767,7 @@ void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition,
 			VolumetricCloudLighting(atmosphere, rayOrigin, sampleWorldPosition, cloudLightDirection, cloudLightIlluminance, cosTheta, stepSize, heightFraction, moonSoftFill,
 				cloudDensityFirst, cloudDensitySecond, weatherDataFirst, weatherDataSecond,
 				layerParametersFirst, layerParametersSecond, lod,
-				luminance, transmittanceToView, depthWeightedSum, depthWeightsSum);
+				luminance, lightningLuminance, transmittanceToView, depthWeightedSum, depthWeightsSum);
 			
 			if (all(transmittanceToView < GetWeather().volumetric_clouds.transmittanceThreshold))
 			{
@@ -805,6 +823,7 @@ void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition,
 		}
 
 		// Layer aerial perspective on top of luminance
+		lightningLuminance *= 1.0 - aerialPerspective.a;
 		luminance = (1.0 - aerialPerspective.a) * luminance + aerialPerspective.rgb * (1.0 - approxTransmittance); // Need to apply 1.0 - approxTransmittance due to inverse alpha
 		//luminance = aerialPerspective.rgb * (1.0 - approxTransmittance); // Debug
 	}
@@ -815,6 +834,7 @@ void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition,
 		// Layer fog on top of luminance
 		float4 fog = GetFog(tDepth, rayOrigin, rayDirection);
 		//luminance = (1.0 - fog.a) * luminance + fog.rgb * (1.0 - approxTransmittance); // premultilpied fog
+		lightningLuminance *= 1.0 - fog.a;
 		luminance = lerp(luminance, fog.rgb * (1.0 - approxTransmittance), fog.a); // non-premultiplied fog
 	}
 
@@ -825,10 +845,12 @@ void RenderClouds(uint3 DTid, float2 uv, float depth, float3 depthWorldPosition,
 	{
 		float atmosphereBlend = CalculateAtmosphereBlend(tDepth);
 		color *= 1.0 - atmosphereBlend;
+        lightningLuminance *= 1.0 - atmosphereBlend;
 	}
 
 	// Output
 	cloudColor = color;
+    lightningColor = lightningLuminance;
 	cloudDepth = float2(tDepth, tToDepthBuffer); // Linear depth
 }
 
@@ -856,7 +878,8 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
 		float4 cloudColor = 0;
 		float2 cloudDepth = 0;
-		RenderClouds(DTid, uv, depth, 0, rayOrigin, rayDirection, cloudColor, cloudDepth);
+        float3 lightningColor = 0;
+		RenderClouds(DTid, uv, depth, 0, rayOrigin, rayDirection, cloudColor, cloudDepth, lightningColor);
 
 		float variance_amount = variance.update(cloudColor);
 		variance_amount = saturate(variance_amount);
@@ -895,9 +918,11 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	
 	float4 cloudColor = 0;
 	float2 cloudDepth = 0;
-	RenderClouds(DTid, uv, depth, depthWorldPosition, rayOrigin, rayDirection, cloudColor, cloudDepth);
+    float3 lightningColor = 0;
+	RenderClouds(DTid, uv, depth, depthWorldPosition, rayOrigin, rayDirection, cloudColor, cloudDepth, lightningColor);
 	
 	texture_render[DTid.xy] = cloudColor;
+    texture_lightning[DTid.xy] = float4(lightningColor, 0);
 	texture_cloudDepth[DTid.xy] = cloudDepth;
 }
 #endif // VOLUMETRICCLOUD_CAPTURE

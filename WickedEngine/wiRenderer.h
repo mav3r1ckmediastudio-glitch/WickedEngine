@@ -852,6 +852,8 @@ namespace wi::renderer
 		mutable int frame = -1;
 		XMUINT2 final_resolution = {};
 		wi::graphics::Texture texture_cloudRender;
+        wi::graphics::Texture texture_lightningRender;
+        wi::graphics::Texture texture_lightningResolve;
 		wi::graphics::Texture texture_cloudDepth;
 		wi::graphics::Texture texture_reproject[2];
 		wi::graphics::Texture texture_reproject_depth[2];

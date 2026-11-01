@@ -4535,7 +4535,7 @@ void UpdatePerFrameData(
             const float rotation = corner(x + 47, z - 29) * 6.28318530718f;
             auto& site = sites[ix + iz * 64];
             // Decorrelated cell displacement; the rotating 4x4 window
-            // includes maximum ±0.45 cell offset plus full volume support.
+            // includes maximum ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â±0.45 cell offset plus full volume support.
             site.attributes = XMFLOAT4((corner(x, z) - .5f) * .9f,
                 (corner(x + 37, z - 71) - .5f) * .9f, (rank + .5f) / 16.0f, corner(x + 113, z - 61));
             site.variation = XMFLOAT4(std::cos(rotation), std::sin(rotation),
@@ -17190,6 +17190,8 @@ void CreateVolumetricCloudResources(VolumetricCloudResources& res, XMUINT2 resol
 	desc.layout = ResourceState::SHADER_RESOURCE_COMPUTE;
 	device->CreateTexture(&desc, nullptr, &res.texture_cloudRender);
 	device->SetName(&res.texture_cloudRender, "clouds.texture_cloudRender");
+    device->CreateTexture(&desc, nullptr, &res.texture_lightningRender);
+    device->SetName(&res.texture_lightningRender, "clouds.lightning_current");
 	desc.format = Format::R32G32_FLOAT;
 	device->CreateTexture(&desc, nullptr, &res.texture_cloudDepth);
 	device->SetName(&res.texture_cloudDepth, "clouds.texture_cloudDepth");
@@ -17201,6 +17203,10 @@ void CreateVolumetricCloudResources(VolumetricCloudResources& res, XMUINT2 resol
 	device->SetName(&res.texture_reproject[0], "clouds.texture_reproject[0]");
 	device->CreateTexture(&desc, nullptr, &res.texture_reproject[1]);
 	device->SetName(&res.texture_reproject[1], "clouds.texture_reproject[1]");
+    desc.layout = ResourceState::SHADER_RESOURCE;
+    device->CreateTexture(&desc, nullptr, &res.texture_lightningResolve);
+    device->SetName(&res.texture_lightningResolve, "clouds.lightning_resolved");
+    desc.layout = ResourceState::SHADER_RESOURCE_COMPUTE;
 	desc.format = Format::R32G32_FLOAT;
 	device->CreateTexture(&desc, nullptr, &res.texture_reproject_depth[0]);
 	device->SetName(&res.texture_reproject_depth[0], "clouds.texture_reproject_depth[0]");
@@ -17260,6 +17266,7 @@ void Postprocess_VolumetricClouds(
 	// Cloud render pass:
 	{
 		device->EventBegin("Volumetric Cloud Render", cmd);
+        wi::profiler::ScopedRangeGPU renderTiming("Cloud Raymarch", cmd);
 		device->BindComputeShader(&shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_RENDER], cmd);
 		device->PushConstants(&postprocess, sizeof(postprocess), cmd);
 
@@ -17289,12 +17296,14 @@ void Postprocess_VolumetricClouds(
 		const GPUResource* uavs[] = {
 			&res.texture_cloudRender,
 			&res.texture_cloudDepth,
+            &res.texture_lightningRender,
 		};
 		device->BindUAVs(uavs, 0, arraysize(uavs), cmd);
 
 		{
 			GPUBarrier barriers[] = {
 				GPUBarrier::Image(&res.texture_cloudRender, res.texture_cloudRender.desc.layout, ResourceState::UNORDERED_ACCESS),
+                GPUBarrier::Image(&res.texture_lightningRender, res.texture_lightningRender.desc.layout, ResourceState::UNORDERED_ACCESS),
 				GPUBarrier::Image(&res.texture_cloudDepth, res.texture_cloudDepth.desc.layout, ResourceState::UNORDERED_ACCESS),
 			};
 			device->Barrier(barriers, arraysize(barriers), cmd);
@@ -17322,9 +17331,11 @@ void Postprocess_VolumetricClouds(
 	{
 		GPUBarrier barriers[] = {
 			GPUBarrier::Image(&res.texture_cloudRender, ResourceState::UNORDERED_ACCESS, res.texture_cloudRender.desc.layout),
+            GPUBarrier::Image(&res.texture_lightningRender, ResourceState::UNORDERED_ACCESS, res.texture_lightningRender.desc.layout),
 			GPUBarrier::Image(&res.texture_cloudDepth, ResourceState::UNORDERED_ACCESS, res.texture_cloudDepth.desc.layout),
 
 			GPUBarrier::Image(&res.texture_reproject[temporal_output], res.texture_reproject[temporal_output].desc.layout, ResourceState::UNORDERED_ACCESS),
+            GPUBarrier::Image(&res.texture_lightningResolve, res.texture_lightningResolve.desc.layout, ResourceState::UNORDERED_ACCESS),
 			GPUBarrier::Image(&res.texture_reproject_depth[temporal_output], res.texture_reproject_depth[temporal_output].desc.layout, ResourceState::UNORDERED_ACCESS),
 			GPUBarrier::Image(&res.texture_reproject_additional[temporal_output], res.texture_reproject_additional[temporal_output].desc.layout, ResourceState::UNORDERED_ACCESS),
 		};
@@ -17334,6 +17345,7 @@ void Postprocess_VolumetricClouds(
 	// Cloud reprojection pass:
 	{
 		device->EventBegin("Volumetric Cloud Reproject", cmd);
+        wi::profiler::ScopedRangeGPU resolveTiming("Cloud Reconstruction", cmd);
 		device->BindComputeShader(&shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_REPROJECT], cmd);
 		device->PushConstants(&postprocess, sizeof(postprocess), cmd);
 
@@ -17342,11 +17354,13 @@ void Postprocess_VolumetricClouds(
 		device->BindResource(&res.texture_reproject[temporal_history], 2, cmd);
 		device->BindResource(&res.texture_reproject_depth[temporal_history], 3, cmd);
 		device->BindResource(&res.texture_reproject_additional[temporal_history], 4, cmd);
+        device->BindResource(&res.texture_lightningRender, 5, cmd);
 
 		const GPUResource* uavs[] = {
 			&res.texture_reproject[temporal_output],
 			&res.texture_reproject_depth[temporal_output],
 			&res.texture_reproject_additional[temporal_output],
+            &res.texture_lightningResolve,
 		};
 		device->BindUAVs(uavs, 0, arraysize(uavs), cmd);
 
@@ -17363,6 +17377,7 @@ void Postprocess_VolumetricClouds(
 	{
 		GPUBarrier barriers[] = {
 			GPUBarrier::Image(&res.texture_reproject[temporal_output], ResourceState::UNORDERED_ACCESS, res.texture_reproject[temporal_output].desc.layout),
+            GPUBarrier::Image(&res.texture_lightningResolve, ResourceState::UNORDERED_ACCESS, res.texture_lightningResolve.desc.layout),
 			GPUBarrier::Image(&res.texture_reproject_depth[temporal_output], ResourceState::UNORDERED_ACCESS, res.texture_reproject_depth[temporal_output].desc.layout),
 			GPUBarrier::Image(&res.texture_reproject_additional[temporal_output], ResourceState::UNORDERED_ACCESS, res.texture_reproject_additional[temporal_output].desc.layout),
 		};
@@ -17409,6 +17424,7 @@ void Postprocess_VolumetricClouds_Upsample(
 
 		device->BindResource(&res.texture_reproject[temporal_output], 0, cmd);
 		device->BindResource(&res.texture_reproject_depth[temporal_output], 1, cmd);
+        device->BindResource(&res.texture_lightningResolve, 2, cmd);
 
 		device->Draw(3, 0, cmd);
 	}
@@ -17462,6 +17478,8 @@ void VolumetricClouds_Capture(
 	postprocess.params0.y = (float)postprocess.resolution.y * 2;
 	postprocess.params0.z = 1.0f / postprocess.params0.x;
 	postprocess.params0.w = 1.0f / postprocess.params0.y;
+    // Independent sky-lighting cache budget; primary camera sampling is unchanged.
+    postprocess.params1.y=wi::arguments::HasArgument("cloud-capture-reference") ? 1.0f : 2.0f;
 	volumetricclouds_frame = (float)scene.cloudmap_frame;
 	device->PushConstants(&postprocess, sizeof(postprocess), cmd);
 

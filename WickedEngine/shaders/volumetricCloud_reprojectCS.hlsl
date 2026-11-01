@@ -9,10 +9,12 @@ Texture2D<float2> cloud_depth_current : register(t1);
 Texture2D<float4> cloud_history : register(t2);
 Texture2D<float2> cloud_depth_history : register(t3);
 Texture2D<float> cloud_additional_history : register(t4);
+Texture2D<float4> lightning_current : register(t5);
 
 RWTexture2D<float4> output : register(u0);
 RWTexture2D<float2> output_depth : register(u1);
 RWTexture2D<float> output_additional : register(u2);
+RWTexture2D<float4> output_lightning : register(u3);
 
 static const float2 temporalResponseMinMax = float2(0.86, 0.96);
 
@@ -34,37 +36,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
 {
 	const float2 uv = (DTid.xy + 0.5f) * postprocess.resolution_rcp;
 
-    // G4 lightning pulses defeat the ordinary four-phase temporal history.
-    // Resolve the freshly marched quarter-resolution cloud neighborhood to
-    // suppress the exposed checkerboard, then use a modest amount of the
-    // previous resolved frame to stabilize the pulse. Keep this fast path
-    // for a brief recovery after the flash ends to clear bright history.
-    // In quiet weather the normal temporal reconstruction is untouched.
-    float4 sheetPower = GetWeather().sheet_light_power;
-    float sheetEnergy = max(max(sheetPower.x, sheetPower.y), sheetPower.z);
-    [branch]
-    if (sheetEnergy > 0.0001f || sheetPower.w > 0.5f)
-    {
-        // postprocess.resolution is the output half-res image; cloud_current
-        // has half its dimensions (quarter of viewport in each axis).
-        const float2 srcTexel = 2.0f * postprocess.resolution_rcp;
-        float4 center = cloud_current.SampleLevel(sampler_linear_clamp, uv, 0);
-        float4 cross =
-            cloud_current.SampleLevel(sampler_linear_clamp, uv + float2(srcTexel.x, 0), 0) +
-            cloud_current.SampleLevel(sampler_linear_clamp, uv - float2(srcTexel.x, 0), 0) +
-            cloud_current.SampleLevel(sampler_linear_clamp, uv + float2(0, srcTexel.y), 0) +
-            cloud_current.SampleLevel(sampler_linear_clamp, uv - float2(0, srcTexel.y), 0);
-        float4 spatial = lerp(center, cross * 0.25f, 0.38f);
-        float4 previous = cloud_history.SampleLevel(sampler_linear_clamp, uv, 0);
-        float historyWeight = volumetricclouds_frame > 0
-            ? (sheetEnergy > 0.0001f ? 0.24f : 0.12f) : 0.0f;
-        output[DTid.xy] = lerp(spatial, previous, historyWeight);
-        output_depth[DTid.xy] =
-            cloud_depth_current.SampleLevel(sampler_linear_clamp, uv, 0);
-        output_additional[DTid.xy] = 0.0f;
-        return;
-    }
-	
 	uint2 renderResolution = postprocess.resolution / 2;
 	uint2 renderCoord = DTid.xy / 2;
 
@@ -288,6 +259,40 @@ void main(uint3 DTid : SV_DispatchThreadID)
 		cloudmap_fallback(depth, V, result);
 	}
 	
+    // The structural cloud history never contains transient lightning.
+    // Reconstruct only current-frame scattering at its actual phase positions.
+    // No old flash survives a dark gap and cloud alpha/depth/motion stay native.
+    float3 lightning = 0;
+    float energy = max(max(GetWeather().sheet_light_power.x,
+                          GetWeather().sheet_light_power.y),
+                          GetWeather().sheet_light_power.z);
+    [branch]
+    if(energy > 0.00001f)
+    {
+        float weightSum = 0;
+        [unroll]
+        for(int sy=-1;sy<=1;++sy)
+        {
+            [unroll]
+            for(int sx=-1;sx<=1;++sx)
+            {
+                int2 c=clamp(int2(renderCoord)+int2(sx,sy),
+                             int2(minRenderCoord),int2(maxRenderCoord));
+                int phase=ComputeCheckerBoardIndex(c,subPixelIndex);
+                float2 samplePosition=float2(c*2+int2(phase&1,phase>>1))+0.5f;
+                float2 delta=(samplePosition-(float2(DTid.xy)+0.5f))*0.5f;
+                float w=exp2(-dot(delta,delta)*1.5f);
+                float sampleSceneDepth=cloud_depth_current[c].y;
+                // Respect opaque silhouettes without changing cloud opacity.
+                if(depth != 0 && abs(sampleSceneDepth-tToDepthBuffer)>max(tToDepthBuffer*0.1f,1.0f))
+                    w=0;
+                lightning+=lightning_current[c].rgb*w;
+                weightSum+=w;
+            }
+        }
+        lightning/=max(weightSum,0.00001f);
+    }
+    output_lightning[DTid.xy]=float4(lightning,0);
 	output[DTid.xy] = result;
 	output_depth[DTid.xy] = depthResult;
 	output_additional[DTid.xy] = additionalResult;
