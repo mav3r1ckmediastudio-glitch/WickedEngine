@@ -1,3 +1,4 @@
+#include "wiArguments.h"
 #include "wiRenderer.h"
 #include "wiHairParticle.h"
 #include "wiEmittedParticle.h"

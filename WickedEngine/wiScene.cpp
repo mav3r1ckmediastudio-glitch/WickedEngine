@@ -1,3 +1,4 @@
+#include "wiArguments.h"
 #include "wiScene.h"
 #include "wiTextureHelper.h"
 #include "wiResourceManager.h"
